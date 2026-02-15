@@ -13,64 +13,8 @@
         "api": "openai-completions",
         "models": [
           {
-            "id": "qwen3:8b",
-            "name": "qwen3:8b",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 131072,
-            "maxTokens": 16384
-          },
-          {
-            "id": "qwen3:4b",
-            "name": "qwen3:4b",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 131072,
-            "maxTokens": 16384
-          },
-          {
-            "id": "qwen3:1.7b",
-            "name": "qwen3:1.7b",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 131072,
-            "maxTokens": 16384
-          },
-          {
-            "id": "qwen3:14b",
-            "name": "qwen3:14b",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 131072,
-            "maxTokens": 16384
-          },
-          {
-            "id": "qwen3:32b",
-            "name": "qwen3:32b",
+            "id": "qwen3-coder:30b-a3b-q4_K_M",
+            "name": "qwen3-coder:30b-a3b-q4_K_M",
             "reasoning": true,
             "input": ["text"],
             "cost": {
@@ -89,7 +33,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "ollama/qwen3:8b"
+        "primary": "ollama/qwen3-coder:30b-a3b-q4_K_M"
       },
       "workspace": "C:\\Users\\Andy\\.openclaw\\workspace"
     }
