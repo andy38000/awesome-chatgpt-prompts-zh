@@ -36,11 +36,28 @@ OpenClaw 配置文件位于：
 # 启动 Ollama 服务
 ollama serve
 
-# 另一个终端，拉取模型（如果还没有的话）
-ollama pull gpt-oss:20b
+# 另一个终端，拉取千问3模型（如果还没有的话）
+ollama pull qwen3:8b
 ```
 
 确认 Ollama 在 `http://127.0.0.1:11434` 运行。
+
+### 千问3 可用模型尺寸
+
+根据你的显存/内存选择合适的版本：
+
+| 模型 | 参数量 | 推荐显存 | 适合场景 |
+|------|--------|----------|----------|
+| `qwen3:1.7b` | 1.7B | 2GB+ | 轻量快速，简单对话 |
+| `qwen3:4b` | 4B | 4GB+ | 日常对话，性价比高 |
+| `qwen3:8b` | 8B | 6GB+ | **默认推荐**，平衡质量和速度 |
+| `qwen3:14b` | 14B | 12GB+ | 高质量回复 |
+| `qwen3:32b` | 32B | 24GB+ | 最强能力 |
+
+切换模型只需一条命令：
+```bash
+openclaw config set agents.defaults.model.primary "ollama/qwen3:32b"
+```
 
 ## 四、启动 OpenClaw Gateway
 
@@ -52,7 +69,7 @@ openclaw gateway run --verbose
 
 你应该看到类似输出：
 ```
-[gateway] agent model: ollama/gpt-oss:20b
+[gateway] agent model: ollama/qwen3:8b
 [gateway] listening on ws://127.0.0.1:18789
 [telegram] [default] starting provider (@andy3800bot)
 ```
@@ -110,7 +127,7 @@ openclaw config get
 | `channels.telegram.groupPolicy` | `allowlist` | 群聊策略（白名单） |
 | `channels.telegram.streamMode` | `partial` | 流式输出模式 |
 | `models.providers.ollama.baseUrl` | `http://127.0.0.1:11434/v1` | Ollama API 地址 |
-| `agents.defaults.model.primary` | `ollama/gpt-oss:20b` | 默认使用的模型 |
+| `agents.defaults.model.primary` | `ollama/qwen3:8b` | 默认使用千问3 8B模型 |
 | `gateway.port` | `18789` | Gateway 端口 |
 
 ## 八、故障排查
