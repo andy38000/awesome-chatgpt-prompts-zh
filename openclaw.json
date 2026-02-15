@@ -1,0 +1,88 @@
+{
+  "wizard": {
+    "lastRunAt": "2026-02-15T08:35:28.099Z",
+    "lastRunVersion": "2026.2.14",
+    "lastRunCommand": "onboard",
+    "lastRunMode": "local"
+  },
+  "models": {
+    "providers": {
+      "ollama": {
+        "baseUrl": "http://127.0.0.1:11434/v1",
+        "apiKey": "ollama-local",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "gpt-oss:20b",
+            "name": "gpt-oss:20b",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 131072,
+            "maxTokens": 16384
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "ollama/gpt-oss:20b"
+      },
+      "workspace": "C:\\Users\\Andy\\.openclaw\\workspace"
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto"
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "dmPolicy": "pairing",
+      "botToken": "7999315279:AAE-nz7z-PuDnJQv9hO74WrPCPhtVXINhFk",
+      "groupPolicy": "allowlist",
+      "streamMode": "partial"
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "8198457337068897a8fe2b6bafb97983805398b38cbff47f"
+    },
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    },
+    "nodes": {
+      "denyCommands": [
+        "camera.snap",
+        "camera.clip",
+        "screen.record",
+        "calendar.add",
+        "contacts.add",
+        "reminders.add"
+      ]
+    }
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": true
+      }
+    }
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.2.14",
+    "lastTouchedAt": "2026-02-15T08:35:28.112Z"
+  }
+}
