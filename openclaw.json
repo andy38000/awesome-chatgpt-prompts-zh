@@ -45,7 +45,8 @@
   "channels": {
     "telegram": {
       "enabled": true,
-      "dmPolicy": "pairing",
+      "dmPolicy": "open",
+      "allowFrom": ["*"],
       "botToken": "7999315279:AAE-nz7z-PuDnJQv9hO74WrPCPhtVXINhFk",
       "groupPolicy": "allowlist",
       "streamMode": "partial"
