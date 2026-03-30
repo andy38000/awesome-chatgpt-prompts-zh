@@ -37,6 +37,7 @@ from restoration import (
     denoise, bilateral_smooth,
     adjust_contrast_brightness, auto_contrast, adaptive_histogram_eq, auto_brightness,
     sharpen, detail_enhance,
+    super_clarity, super_clarity_preset,
     remove_stains, remove_yellow_stains,
     full_restoration_pipeline,
 )
@@ -118,7 +119,7 @@ def smart_restore_fn(image):
         report += "- ✅ CLAHE 自适应对比度\n"
     else:
         report += "- ✅ 自动对比度\n"
-    report += "- ✅ 锐化增强\n"
+    report += "- ✅ **超级清晰度**（多尺度锐化+高频提取+边缘增强+局部对比度）\n"
 
     return to_rgb(result), report
 
@@ -269,6 +270,26 @@ def sharpen_fn(image, amount):
         return None
     bgr = from_rgb(image)
     return to_rgb(sharpen(bgr, amount))
+
+
+def super_clarity_fn(image, strength, detail_boost, edge_boost,
+                     local_contrast, micro_texture):
+    if image is None:
+        return None
+    bgr = from_rgb(image)
+    bgr = resize_if_needed(bgr)
+    result = super_clarity(bgr, strength, True, detail_boost,
+                           edge_boost, local_contrast, micro_texture)
+    return to_rgb(result)
+
+
+def super_clarity_preset_fn(image, level):
+    if image is None:
+        return None
+    bgr = from_rgb(image)
+    bgr = resize_if_needed(bgr)
+    result = super_clarity_preset(bgr, level)
+    return to_rgb(result)
 
 
 def detail_fn(image, sigma_s, sigma_r):
@@ -488,6 +509,38 @@ def build_app():
 
             btn_sharp.click(sharpen_fn, [img_sharp, sl_sharp_amt], [out_sharp])
             btn_detail.click(detail_fn, [img_sharp, sl_det_ss, sl_det_sr], [out_sharp])
+
+        # ==== Tab: 超级清晰度 ====
+        with gr.Tab("🔬 超级清晰度"):
+            gr.Markdown(
+                "**超级清晰度** — 融合多尺度锐化、高频细节提取、边缘增强和局部对比度增强，"
+                "让唐卡的笔触纹理、线条轮廓和颜料细节全部清晰可见。"
+            )
+            with gr.Row():
+                with gr.Column():
+                    img_hd = gr.Image(label="上传唐卡图片", type="numpy")
+                    gr.Markdown("**快速预设（推荐）**")
+                    dd_hd_level = gr.Dropdown(
+                        ["轻微", "标准", "强力", "极限"],
+                        value="标准",
+                        label="清晰度等级",
+                    )
+                    btn_hd_preset = gr.Button("一键超清", variant="primary", size="lg")
+                    gr.Markdown("---")
+                    gr.Markdown("**高级参数（手动微调）**")
+                    sl_hd_str = gr.Slider(0.1, 2.0, value=1.0, step=0.1, label="总体强度")
+                    sl_hd_detail = gr.Slider(0.1, 2.0, value=1.0, step=0.1, label="细节增强")
+                    sl_hd_edge = gr.Slider(0.1, 2.0, value=0.8, step=0.1, label="边缘增强")
+                    sl_hd_lc = gr.Slider(0.5, 5.0, value=2.5, step=0.5, label="局部对比度")
+                    sl_hd_micro = gr.Slider(0.0, 1.5, value=0.6, step=0.1, label="微纹理恢复")
+                    btn_hd_custom = gr.Button("自定义超清")
+                with gr.Column():
+                    out_hd = gr.Image(label="超清结果", type="numpy")
+
+            btn_hd_preset.click(super_clarity_preset_fn, [img_hd, dd_hd_level], [out_hd])
+            btn_hd_custom.click(super_clarity_fn,
+                                [img_hd, sl_hd_str, sl_hd_detail, sl_hd_edge,
+                                 sl_hd_lc, sl_hd_micro], [out_hd])
 
         # ==== Tab 8: 去污渍 ====
         with gr.Tab("去污渍"):

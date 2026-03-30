@@ -384,6 +384,156 @@ def detail_enhance(image: np.ndarray, sigma_s: float = 10,
 
 
 # ---------------------------------------------------------------------------
+# 8.5 超级清晰度 (Super Clarity)
+# ---------------------------------------------------------------------------
+
+def _multi_scale_unsharp(image: np.ndarray,
+                         scales: list = None,
+                         weights: list = None) -> np.ndarray:
+    """
+    多尺度非锐化掩膜：在不同模糊半径上分别提取细节并叠加。
+    小尺度恢复纹理（笔触纤维），大尺度恢复结构（线条轮廓）。
+    """
+    if scales is None:
+        scales = [1, 3, 7]
+    if weights is None:
+        weights = [0.5, 0.3, 0.2]
+
+    img_f = image.astype(np.float64)
+    detail_sum = np.zeros_like(img_f)
+
+    for sigma, w in zip(scales, weights):
+        blurred = cv2.GaussianBlur(img_f, (0, 0), sigma)
+        detail = img_f - blurred
+        detail_sum += detail * w
+
+    return detail_sum
+
+
+def _high_frequency_boost(image: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    """
+    高频提升滤波：用拉普拉斯算子提取高频分量（边缘/纹理），
+    然后将其按比例加回原图。
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    lap = cv2.Laplacian(gray, cv2.CV_64F, ksize=3)
+
+    lap_3ch = cv2.merge([lap, lap, lap])
+    result = image.astype(np.float64) + lap_3ch * strength
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def _guided_filter(image: np.ndarray, radius: int = 8,
+                   eps: float = 0.01) -> np.ndarray:
+    """
+    引导滤波：在平滑噪声的同时精确保留边缘。
+    用作清晰度增强前的预处理，去除噪声但保留结构。
+    """
+    img_f = image.astype(np.float64) / 255.0
+    result = np.zeros_like(img_f)
+
+    for c in range(3):
+        I = img_f[:, :, c]
+        mean_I = cv2.boxFilter(I, -1, (radius, radius))
+        mean_II = cv2.boxFilter(I * I, -1, (radius, radius))
+        var_I = mean_II - mean_I * mean_I
+
+        a = var_I / (var_I + eps)
+        b = mean_I - a * mean_I
+
+        mean_a = cv2.boxFilter(a, -1, (radius, radius))
+        mean_b = cv2.boxFilter(b, -1, (radius, radius))
+
+        result[:, :, c] = mean_a * I + mean_b
+
+    return np.clip(result * 255, 0, 255).astype(np.uint8)
+
+
+def _local_contrast_enhance(image: np.ndarray, grid_size: int = 16,
+                            clip_limit: float = 3.0) -> np.ndarray:
+    """
+    局部对比度增强：对 L 通道做精细 CLAHE，使暗区细节也能显现。
+    """
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit,
+                            tileGridSize=(grid_size, grid_size))
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def super_clarity(image: np.ndarray,
+                  strength: float = 1.0,
+                  denoise_first: bool = True,
+                  detail_boost: float = 1.0,
+                  edge_boost: float = 0.8,
+                  local_contrast: float = 2.5,
+                  micro_texture: float = 0.6) -> np.ndarray:
+    """
+    超级清晰度：融合多种技术让画面变得极其清晰锐利。
+
+    处理流程：
+    1. 引导滤波去噪（保留边缘的同时去除噪声，防止锐化放大噪点）
+    2. 多尺度非锐化掩膜（分别恢复微观纹理、中频细节和宏观结构）
+    3. 高频提升滤波（用拉普拉斯算子增强边缘）
+    4. 局部对比度增强（让暗区细节也清晰可见）
+    5. 微纹理增强（恢复唐卡绘画的笔触和颜料纹理）
+
+    strength: 总体强度 0.1-2.0，1.0为标准
+    """
+    s = np.clip(strength, 0.1, 2.0)
+    result = image.copy()
+
+    if denoise_first:
+        result = _guided_filter(result, radius=4, eps=0.005)
+
+    details = _multi_scale_unsharp(
+        result,
+        scales=[1, 3, 7, 15],
+        weights=[0.4 * s, 0.3 * s, 0.2 * s, 0.1 * s],
+    )
+    result = np.clip(result.astype(np.float64) + details * detail_boost, 0, 255).astype(np.uint8)
+
+    result = _high_frequency_boost(result, strength=edge_boost * s * 0.3)
+
+    result = _local_contrast_enhance(
+        result,
+        grid_size=16,
+        clip_limit=local_contrast * s,
+    )
+
+    if micro_texture > 0:
+        micro = _multi_scale_unsharp(
+            result,
+            scales=[0.5, 1.0],
+            weights=[0.6 * s, 0.4 * s],
+        )
+        result = np.clip(
+            result.astype(np.float64) + micro * micro_texture,
+            0, 255,
+        ).astype(np.uint8)
+
+    return result
+
+
+def super_clarity_preset(image: np.ndarray, level: str = "标准") -> np.ndarray:
+    """
+    清晰度预设模式。
+    - 轻微：细微提升，最自然
+    - 标准：明显提升，适合大多数唐卡
+    - 强力：大幅提升，适合非常模糊的图
+    - 极限：最大清晰度，适合严重模糊
+    """
+    presets = {
+        "轻微": dict(strength=0.5, detail_boost=0.7, edge_boost=0.5, local_contrast=1.5, micro_texture=0.3),
+        "标准": dict(strength=1.0, detail_boost=1.0, edge_boost=0.8, local_contrast=2.5, micro_texture=0.6),
+        "强力": dict(strength=1.5, detail_boost=1.3, edge_boost=1.2, local_contrast=3.0, micro_texture=0.8),
+        "极限": dict(strength=2.0, detail_boost=1.5, edge_boost=1.5, local_contrast=3.5, micro_texture=1.0),
+    }
+    params = presets.get(level, presets["标准"])
+    return super_clarity(image, **params)
+
+
+# ---------------------------------------------------------------------------
 # 9. 去污渍
 # ---------------------------------------------------------------------------
 
@@ -520,8 +670,10 @@ def smart_restoration(image: np.ndarray) -> np.ndarray:
         result = auto_contrast(result, clip_percent=1.0)
 
     if info["is_blurry"]:
-        result = sharpen(result, amount=0.8)
+        result = super_clarity(result, strength=1.5, detail_boost=1.3,
+                               edge_boost=1.2, local_contrast=3.0, micro_texture=0.8)
     else:
-        result = sharpen(result, amount=0.5)
+        result = super_clarity(result, strength=1.0, detail_boost=1.0,
+                               edge_boost=0.8, local_contrast=2.5, micro_texture=0.6)
 
     return result
