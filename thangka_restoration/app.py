@@ -460,6 +460,7 @@ if __name__ == "__main__":
             server_port=port,
             inbrowser=True,
             share=False,
+            ssr_mode=False,
         )
     except Exception as e:
         print(f"\n启动失败: {e}")
