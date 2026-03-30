@@ -533,18 +533,31 @@ if __name__ == "__main__":
     print(f"  地址: http://127.0.0.1:{port}")
     print("=" * 50)
 
+    import os
+    os.environ["GRADIO_SSR_MODE"] = "false"
+
+    launch_kwargs = dict(
+        server_name="127.0.0.1",
+        server_port=port,
+        inbrowser=True,
+        share=False,
+    )
+
+    try:
+        import inspect
+        sig = inspect.signature(gr.Blocks.launch)
+        if "ssr_mode" in sig.parameters:
+            launch_kwargs["ssr_mode"] = False
+    except Exception:
+        pass
+
     try:
         app = build_app()
-        app.launch(
-            server_name="127.0.0.1",
-            server_port=port,
-            inbrowser=True,
-            share=False,
-            ssr_mode=False,
-        )
+        app.launch(**launch_kwargs)
     except Exception as e:
         print(f"\n启动失败: {e}")
         print("\n请尝试以下解决方法:")
         print("1. 打开任务管理器，结束所有 python.exe 进程，然后重试")
         print("2. 确认已安装所有依赖: pip install -r requirements.txt")
+        print("3. 升级 gradio: pip install --upgrade gradio")
         sys.exit(1)
