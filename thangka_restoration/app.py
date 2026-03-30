@@ -52,6 +52,23 @@ footer { display: none !important; }
 
 
 # ---------------------------------------------------------------------------
+# 工具函数
+# ---------------------------------------------------------------------------
+
+MAX_PIXELS = 2000
+
+def resize_if_needed(image: np.ndarray) -> np.ndarray:
+    """如果图片太大，自动缩放到合理尺寸，避免处理超时。"""
+    h, w = image.shape[:2]
+    if max(h, w) <= MAX_PIXELS:
+        return image
+    scale = MAX_PIXELS / max(h, w)
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    return cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+
+# ---------------------------------------------------------------------------
 # 回调函数
 # ---------------------------------------------------------------------------
 
@@ -59,6 +76,7 @@ def smart_restore_fn(image):
     if image is None:
         return None, ""
     bgr = from_rgb(image)
+    bgr = resize_if_needed(bgr)
     info = analyze_image(bgr)
     result = smart_restoration(bgr)
 
@@ -112,6 +130,7 @@ def one_click_restore(image, crack_repair, crack_sens, crack_rad,
     if image is None:
         return None
     bgr = from_rgb(image)
+    bgr = resize_if_needed(bgr)
     result = full_restoration_pipeline(
         bgr,
         do_crack_repair=crack_repair,
@@ -535,12 +554,14 @@ if __name__ == "__main__":
 
     import os
     os.environ["GRADIO_SSR_MODE"] = "false"
+    os.environ["GRADIO_TEMP_DIR"] = os.path.join(os.path.expanduser("~"), ".gradio_tmp")
 
     launch_kwargs = dict(
         server_name="127.0.0.1",
         server_port=port,
         inbrowser=True,
         share=False,
+        max_file_size="50mb",
     )
 
     try:
