@@ -215,7 +215,7 @@ def auto_white_balance(image: np.ndarray) -> np.ndarray:
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
-def enhance_gold(image: np.ndarray, intensity: float = 1.4) -> np.ndarray:
+def enhance_gold(image: np.ndarray, intensity: float = 1.15) -> np.ndarray:
     """增强唐卡中金色区域的光泽。"""
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
@@ -393,7 +393,7 @@ def full_restoration_pipeline(
     saturation: float = 1.4,
     warmth: float = 1.0,
     do_gold_enhance: bool = True,
-    gold_intensity: float = 1.4,
+    gold_intensity: float = 1.15,
     do_auto_contrast: bool = True,
     do_sharpen: bool = True,
     sharpen_amount: float = 0.5,
@@ -451,7 +451,7 @@ def smart_restoration(image: np.ndarray) -> np.ndarray:
     else:
         result = restore_colors(result, saturation=1.35, warmth=1.0)
 
-    result = enhance_gold(result, intensity=1.4)
+    result = enhance_gold(result, intensity=1.15)
     result = enhance_red_blue(result, intensity=1.2)
 
     if info["is_low_contrast"]:

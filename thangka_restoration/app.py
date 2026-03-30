@@ -306,7 +306,7 @@ def build_app():
                             sl_sat = gr.Slider(0.8, 2.5, value=1.4, step=0.05, label="饱和度")
                             sl_warm = gr.Slider(0.8, 1.3, value=1.0, step=0.05, label="暖色调")
                         ck_gold = gr.Checkbox(label="金色增强", value=True)
-                        sl_gold = gr.Slider(0.8, 2.5, value=1.4, step=0.1, label="金色强度")
+                        sl_gold = gr.Slider(0.8, 2.0, value=1.15, step=0.05, label="金色强度")
                         ck_auto_cont = gr.Checkbox(label="自动对比度", value=True)
                         ck_sharp = gr.Checkbox(label="锐化", value=True)
                         sl_sharp = gr.Slider(0.0, 2.0, value=0.5, step=0.1, label="锐化量")
