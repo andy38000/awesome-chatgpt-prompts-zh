@@ -16,6 +16,8 @@ import os
 import sys
 
 os.environ["GRADIO_SSR_MODE"] = "false"
+os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
+os.environ["no_proxy"] = "localhost,127.0.0.1,::1"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
