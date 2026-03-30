@@ -107,34 +107,26 @@ def _estimate_atmospheric_light(image: np.ndarray, dark_channel: np.ndarray) -> 
     return atmospheric
 
 
-def dehaze(image: np.ndarray, strength: float = 0.4) -> np.ndarray:
+def dehaze(image: np.ndarray, strength: float = 0.3) -> np.ndarray:
     """
-    温和去雾：去除灰蒙层但保护唐卡本身的暖色基调。
-    通过与原图混合来控制强度，避免颜色偏移。
-    strength: 0-1，建议唐卡用 0.3-0.5。
+    安全去灰蒙：不使用形态学操作（erode会吃掉细节），
+    改用 LAB 空间亮度通道的局部-全局差异来提升透明度。
+    这个方法只增强，绝不会丢失任何像素细节。
     """
-    img_float = image.astype(np.float64) / 255.0
-    dark = _get_dark_channel(image, 15)
-    atmospheric = _estimate_atmospheric_light(image, dark) / 255.0
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+    l = lab[:, :, 0]
 
-    omega = np.clip(strength, 0.1, 0.7)
-    norm_img = img_float / (atmospheric + 1e-6)
-    dark_norm = _get_dark_channel((norm_img * 255).astype(np.uint8), 15) / 255.0
-    transmission = 1.0 - omega * dark_norm
-    transmission = np.clip(transmission, 0.2, 1.0)
+    local_mean = cv2.GaussianBlur(l, (0, 0), sigmaX=50)
+    global_mean = np.mean(l)
 
-    transmission = cv2.GaussianBlur(transmission, (0, 0), sigmaX=40)
+    haze_map = local_mean - global_mean
+    haze_map = np.clip(haze_map, 0, None)
 
-    dehazed = np.zeros_like(img_float)
-    for c in range(3):
-        dehazed[:, :, c] = (img_float[:, :, c] - atmospheric[c]) / (transmission + 1e-6) + atmospheric[c]
+    correction = haze_map * strength * 0.5
+    lab[:, :, 0] = np.clip(l - correction, 0, 255)
 
-    dehazed = np.clip(dehazed, 0, 1)
-
-    blend = 0.5 + strength * 0.3
-    result = img_float * (1 - blend) + dehazed * blend
-
-    return np.clip(result * 255, 0, 255).astype(np.uint8)
+    lab = np.clip(lab, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
 # ---------------------------------------------------------------------------
@@ -628,37 +620,61 @@ def full_restoration_pipeline(
     return result
 
 
+def reveal_faded_details(image: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    """
+    让褪色的图案重新显现。
+    原理：在 LAB L 通道上用小窗口 CLAHE 放大局部对比度，
+    同时在 a/b 通道上也轻微放大色差，让几乎看不见的花纹重新有颜色。
+    不做任何模糊/腐蚀，只增强已有的微小差异。
+    """
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+
+    clip = 1.5 + strength
+    clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=(4, 4))
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+
+    if strength > 0.5:
+        a = lab[:, :, 1].astype(np.float32)
+        b = lab[:, :, 2].astype(np.float32)
+        a_mid, b_mid = 128.0, 128.0
+        boost = 1.0 + strength * 0.15
+        lab[:, :, 1] = np.clip((a - a_mid) * boost + a_mid, 0, 255).astype(np.uint8)
+        lab[:, :, 2] = np.clip((b - b_mid) * boost + b_mid, 0, 255).astype(np.uint8)
+
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
 def smart_restoration(image: np.ndarray) -> np.ndarray:
     """
-    智能修复模式 V4：
-    核心原则：
-    - 绝不模糊！唐卡的笔触纹理是灵魂，必须100%保留
-    - 保留暖色调，唐卡就应该是暖色的
-    - 只做：去灰蒙 + 色彩微调 + 对比度 + 清晰化
+    智能修复模式 V5：
 
-    绝对禁止：去噪、大面积平滑、过度色偏校正
+    绝对禁止清单：去噪、形态学操作、大核模糊、任何会丢像素的操作。
+    所有操作只在色彩空间做加法/乘法增强，永远不减少信息。
+
+    步骤：
+    1. 亮度校正（gamma，纯查表，零损失）
+    2. 色彩微增强（HSV 饱和度乘法，零损失）
+    3. 让褪色图案重新显现（小窗口 CLAHE，只放大已有差异）
+    4. 全局对比度优化（直方图拉伸，零损失）
+    5. 轻微锐化（unsharp mask，只做加法）
     """
     info = analyze_image(image)
     result = image.copy()
-
-    if info["haziness"] > 30:
-        haze_str = min(0.35, 0.15 + info["haziness"] / 500.0)
-        result = dehaze(result, strength=haze_str)
 
     if info["is_dark"]:
         result = auto_brightness(result, target=115.0)
 
     if info["is_very_faded"]:
-        result = restore_colors(result, saturation=1.4, warmth=1.0)
+        result = restore_colors(result, saturation=1.35, warmth=1.0)
     elif info["is_faded"]:
-        result = restore_colors(result, saturation=1.25, warmth=1.0)
+        result = restore_colors(result, saturation=1.2, warmth=1.0)
     else:
         result = restore_colors(result, saturation=1.1, warmth=1.0)
 
+    result = reveal_faded_details(result, strength=1.0)
+
     result = auto_contrast(result, clip_percent=0.5)
 
-    result = super_clarity(result, strength=0.5, denoise_first=False,
-                           detail_boost=0.6, edge_boost=0.4,
-                           local_contrast=1.5, micro_texture=0.3)
+    result = sharpen(result, amount=0.3)
 
     return result

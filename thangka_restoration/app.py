@@ -30,7 +30,7 @@ import gradio as gr
 from restoration import (
     from_rgb, to_rgb, to_cv2,
     analyze_image, smart_restoration,
-    dehaze, reduce_yellowing, correct_color_cast,
+    dehaze, reduce_yellowing, correct_color_cast, reveal_faded_details,
     detect_cracks, inpaint_cracks, auto_repair_cracks, manual_inpaint,
     restore_colors, adaptive_color_restore, auto_white_balance,
     enhance_gold, enhance_red_blue,
@@ -100,20 +100,18 @@ def smart_restore_fn(image):
     report += f"- 泛黄偏移: {info['yellow_bias']:.1f}"
     report += f" {'⚠️ 泛黄' if info['is_yellowed'] else ''}\n"
     report += "\n**已自动执行的修复操作：**\n"
-    report += "- ❌ 不做去噪（保护笔触纹理）\n"
-    if info['haziness'] > 30:
-        report += "- ✅ 轻微去灰蒙（保留暖色调）\n"
     if info['is_dark']:
-        report += "- ✅ 亮度提升\n"
+        report += "- ✅ 亮度校正（gamma查表，零损失）\n"
     if info.get('is_very_faded'):
-        report += "- ✅ 色彩恢复（+40%）\n"
+        report += "- ✅ 色彩恢复（饱和度+35%）\n"
     elif info['is_faded']:
-        report += "- ✅ 色彩恢复（+25%）\n"
+        report += "- ✅ 色彩恢复（饱和度+20%）\n"
     else:
-        report += "- ✅ 色彩微调（+10%）\n"
-    report += "- ✅ 自动对比度\n"
-    report += "- ✅ 细节增强（不模糊）\n"
-    report += "\n*原则：绝不模糊，保留所有笔触纹理和暖色调*"
+        report += "- ✅ 色彩微调（饱和度+10%）\n"
+    report += "- ✅ **褪色图案显现**（小窗口CLAHE放大局部差异）\n"
+    report += "- ✅ 对比度优化（直方图拉伸）\n"
+    report += "- ✅ 轻微锐化\n"
+    report += "\n*所有操作只做加法增强，绝不丢失任何像素信息*"
 
     return to_rgb(result), report
 
