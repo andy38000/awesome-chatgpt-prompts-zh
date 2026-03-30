@@ -3,6 +3,8 @@
 
 提供裂痕修复、颜色恢复、去噪、去污渍、边缘增强、对比度调整等功能，
 适用于受损唐卡图像的数字化修复。
+
+设计原则：保守修复，宁可少修也不要破坏原画。
 """
 
 import cv2
@@ -35,32 +37,69 @@ def from_rgb(image: np.ndarray) -> np.ndarray:
 # 1. 裂痕检测与修复
 # ---------------------------------------------------------------------------
 
-def detect_cracks(image: np.ndarray, sensitivity: int = 50) -> np.ndarray:
+def detect_cracks(image: np.ndarray, sensitivity: int = 30) -> np.ndarray:
     """
-    基于形态学和边缘检测的裂痕自动识别。
-    返回二值掩膜，白色区域为检测到的裂痕。
+    针对唐卡优化的裂痕检测。
+
+    核心思路：真正的裂痕是穿越不同颜色区域的细窄亮线/暗线，
+    而绘画线条是构成图案的有意笔触。通过以下策略区分：
+    1. 用形态学黑帽/白帽变换提取比周围亮或暗的细线
+    2. 只保留细长结构（高长宽比），过滤掉大块区域
+    3. 过滤掉太大的连通区域（那是绘画本身的线条）
+
+    sensitivity: 1-100，越大检测越多（但也越容易误伤）
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
 
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(gray)
+    kernel_size = max(3, min(15, int(min(h, w) / 200)))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
 
-    thresh = max(10, 100 - sensitivity)
-    edges = cv2.Canny(enhanced, thresh, thresh * 2)
+    kernel_line = cv2.getStructuringElement(
+        cv2.MORPH_RECT, (kernel_size, kernel_size)
+    )
 
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel_close, iterations=2)
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel_line)
+    whitehat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, kernel_line)
+    combined = cv2.add(blackhat, whitehat)
 
-    kernel_thin = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 3))
-    mask = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel_thin, iterations=1)
+    thresh_val = max(5, 60 - sensitivity)
+    _, binary = cv2.threshold(combined, thresh_val, 255, cv2.THRESH_BINARY)
 
-    kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    mask = cv2.dilate(mask, kernel_dilate, iterations=1)
+    thin_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, thin_kernel, iterations=1)
+
+    mask = np.zeros_like(binary)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+
+    total_pixels = h * w
+    max_area = total_pixels * 0.002
+    min_area = max(3, total_pixels * 0.000005)
+
+    for i in range(1, num_labels):
+        area = stats[i, cv2.CC_STAT_AREA]
+        comp_w = stats[i, cv2.CC_STAT_WIDTH]
+        comp_h = stats[i, cv2.CC_STAT_HEIGHT]
+
+        if area < min_area or area > max_area:
+            continue
+
+        aspect = max(comp_w, comp_h) / (min(comp_w, comp_h) + 1e-6)
+        compactness = area / (comp_w * comp_h + 1e-6)
+
+        if aspect < 2.0 and compactness > 0.5:
+            continue
+
+        mask[labels == i] = 255
+
+    dilate_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    mask = cv2.dilate(mask, dilate_k, iterations=1)
 
     return mask
 
 
-def inpaint_cracks(image: np.ndarray, mask: np.ndarray, radius: int = 5,
+def inpaint_cracks(image: np.ndarray, mask: np.ndarray, radius: int = 3,
                    method: str = "telea") -> np.ndarray:
     """
     使用图像修复算法修复裂痕区域。
@@ -75,8 +114,8 @@ def inpaint_cracks(image: np.ndarray, mask: np.ndarray, radius: int = 5,
     return result
 
 
-def auto_repair_cracks(image: np.ndarray, sensitivity: int = 50,
-                       radius: int = 5, method: str = "telea") -> np.ndarray:
+def auto_repair_cracks(image: np.ndarray, sensitivity: int = 30,
+                       radius: int = 3, method: str = "telea") -> np.ndarray:
     """自动检测裂痕并修复（一步完成）。"""
     mask = detect_cracks(image, sensitivity)
     return inpaint_cracks(image, mask, radius, method)
@@ -87,7 +126,7 @@ def auto_repair_cracks(image: np.ndarray, sensitivity: int = 50,
 # ---------------------------------------------------------------------------
 
 def manual_inpaint(image: np.ndarray, mask: np.ndarray,
-                   radius: int = 7, method: str = "telea") -> np.ndarray:
+                   radius: int = 5, method: str = "telea") -> np.ndarray:
     """根据用户手动标记的掩膜区域进行修复。"""
     return inpaint_cracks(image, mask, radius, method)
 
@@ -96,7 +135,7 @@ def manual_inpaint(image: np.ndarray, mask: np.ndarray,
 # 3. 颜色恢复与增强
 # ---------------------------------------------------------------------------
 
-def restore_colors(image: np.ndarray, saturation: float = 1.3,
+def restore_colors(image: np.ndarray, saturation: float = 1.15,
                    warmth: float = 1.0) -> np.ndarray:
     """
     恢复唐卡褪色的颜色。
@@ -108,7 +147,7 @@ def restore_colors(image: np.ndarray, saturation: float = 1.3,
     hsv[:, :, 1] = np.clip(hsv[:, :, 1] * saturation, 0, 255)
 
     if warmth != 1.0:
-        hsv[:, :, 0] = np.clip(hsv[:, :, 0] + (warmth - 1.0) * 5, 0, 179)
+        hsv[:, :, 0] = np.clip(hsv[:, :, 0] + (warmth - 1.0) * 3, 0, 179)
 
     hsv = hsv.astype(np.uint8)
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
@@ -129,7 +168,7 @@ def auto_white_balance(image: np.ndarray) -> np.ndarray:
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
-def enhance_gold(image: np.ndarray, intensity: float = 1.3) -> np.ndarray:
+def enhance_gold(image: np.ndarray, intensity: float = 1.2) -> np.ndarray:
     """
     增强唐卡中金色区域的光泽。
     通过在 HSV 空间中定位金色/黄色调并增强亮度实现。
@@ -152,14 +191,14 @@ def enhance_gold(image: np.ndarray, intensity: float = 1.3) -> np.ndarray:
 # 4. 去噪与平滑
 # ---------------------------------------------------------------------------
 
-def denoise(image: np.ndarray, strength: int = 10) -> np.ndarray:
+def denoise(image: np.ndarray, strength: int = 5) -> np.ndarray:
     """非局部均值去噪，保留细节的同时减少噪声。"""
     return cv2.fastNlMeansDenoisingColored(image, None, strength, strength, 7, 21)
 
 
 def bilateral_smooth(image: np.ndarray, d: int = 9,
-                     sigma_color: float = 75,
-                     sigma_space: float = 75) -> np.ndarray:
+                     sigma_color: float = 50,
+                     sigma_space: float = 50) -> np.ndarray:
     """双边滤波平滑，保留边缘的同时平滑表面。"""
     return cv2.bilateralFilter(image, d, sigma_color, sigma_space)
 
@@ -175,7 +214,7 @@ def adjust_contrast_brightness(image: np.ndarray, contrast: float = 1.0,
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
-def auto_contrast(image: np.ndarray, clip_percent: float = 1.0) -> np.ndarray:
+def auto_contrast(image: np.ndarray, clip_percent: float = 0.5) -> np.ndarray:
     """
     自动对比度拉伸（直方图裁剪）。
     clip_percent: 裁剪百分比，越大拉伸越强。
@@ -201,7 +240,7 @@ def auto_contrast(image: np.ndarray, clip_percent: float = 1.0) -> np.ndarray:
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
-def adaptive_histogram_eq(image: np.ndarray, clip_limit: float = 2.0,
+def adaptive_histogram_eq(image: np.ndarray, clip_limit: float = 1.5,
                           tile_size: int = 8) -> np.ndarray:
     """自适应直方图均衡化 (CLAHE)，改善局部对比度。"""
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
@@ -215,7 +254,7 @@ def adaptive_histogram_eq(image: np.ndarray, clip_limit: float = 2.0,
 # 6. 边缘增强与锐化
 # ---------------------------------------------------------------------------
 
-def sharpen(image: np.ndarray, amount: float = 1.0) -> np.ndarray:
+def sharpen(image: np.ndarray, amount: float = 0.3) -> np.ndarray:
     """非锐化掩膜 (Unsharp Mask) 锐化。"""
     blurred = cv2.GaussianBlur(image, (0, 0), 3)
     result = cv2.addWeighted(image, 1.0 + amount, blurred, -amount, 0)
@@ -233,8 +272,8 @@ def detail_enhance(image: np.ndarray, sigma_s: float = 10,
 # ---------------------------------------------------------------------------
 
 def remove_stains(image: np.ndarray, lower_thresh: tuple = (0, 0, 0),
-                  upper_thresh: tuple = (50, 50, 50),
-                  radius: int = 7) -> np.ndarray:
+                  upper_thresh: tuple = (30, 30, 30),
+                  radius: int = 5) -> np.ndarray:
     """
     通过颜色阈值检测深色污渍并修复。
     适用于墨渍、霉斑等深色污损。
@@ -244,23 +283,21 @@ def remove_stains(image: np.ndarray, lower_thresh: tuple = (0, 0, 0),
     mask = cv2.inRange(image, lower, upper)
 
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    mask = cv2.dilate(mask, kernel, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
 
     return cv2.inpaint(image, mask, radius, cv2.INPAINT_TELEA)
 
 
-def remove_yellow_stains(image: np.ndarray, radius: int = 7) -> np.ndarray:
+def remove_yellow_stains(image: np.ndarray, radius: int = 5) -> np.ndarray:
     """去除泛黄污渍（常见于老旧唐卡）。"""
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-    lower_yellow = np.array([18, 40, 120])
-    upper_yellow = np.array([35, 200, 255])
+    lower_yellow = np.array([18, 60, 150])
+    upper_yellow = np.array([30, 200, 255])
     mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
 
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    mask = cv2.dilate(mask, kernel, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
 
     return cv2.inpaint(image, mask, radius, cv2.INPAINT_TELEA)
 
@@ -271,25 +308,28 @@ def remove_yellow_stains(image: np.ndarray, radius: int = 7) -> np.ndarray:
 
 def full_restoration_pipeline(
     image: np.ndarray,
-    do_crack_repair: bool = True,
-    crack_sensitivity: int = 50,
-    crack_radius: int = 5,
+    do_crack_repair: bool = False,
+    crack_sensitivity: int = 30,
+    crack_radius: int = 3,
     do_stain_removal: bool = False,
     do_denoise: bool = True,
-    denoise_strength: int = 10,
+    denoise_strength: int = 5,
     do_color_restore: bool = True,
-    saturation: float = 1.3,
+    saturation: float = 1.15,
     warmth: float = 1.0,
     do_gold_enhance: bool = False,
-    gold_intensity: float = 1.3,
+    gold_intensity: float = 1.2,
     do_auto_contrast: bool = True,
     do_sharpen: bool = True,
-    sharpen_amount: float = 0.5,
+    sharpen_amount: float = 0.3,
     do_white_balance: bool = False,
 ) -> np.ndarray:
     """
     一键综合修复流水线。
     按合理顺序依次执行选定的修复步骤。
+
+    默认配置偏保守：只做轻微去噪、色彩微调、对比度优化和轻度锐化。
+    裂痕修复和污渍去除默认关闭，需要用户明确开启。
     """
     result = image.copy()
 

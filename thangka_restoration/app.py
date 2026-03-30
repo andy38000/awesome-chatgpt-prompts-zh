@@ -224,8 +224,8 @@ def build_app():
         gr.Markdown(
             """
             # 🎨 唐卡修复工具
-            **数字化修复受损唐卡图像** — 支持裂痕修复、颜色恢复、去噪去污、对比度增强等多种功能。
-            上传一张唐卡图片，选择修复功能，即刻开始修复。
+            **数字化修复受损唐卡图像** — 支持颜色恢复、去噪、对比度增强、裂痕修复等多种功能。
+            默认只做轻微增强，不会破坏原画细节。如需裂痕修复，建议先在「裂痕修复」标签页预览。
             """
         )
 
@@ -236,22 +236,23 @@ def build_app():
                 with gr.Column(scale=1):
                     img_oneclick = gr.Image(label="上传唐卡图片", type="numpy")
                     with gr.Accordion("修复选项", open=True):
-                        ck_crack = gr.Checkbox(label="裂痕修复", value=True)
+                        gr.Markdown("⚠️ **裂痕修复**默认关闭，建议先用「裂痕修复」标签页预览效果后再开启。")
+                        ck_crack = gr.Checkbox(label="裂痕修复（谨慎使用）", value=False)
                         with gr.Row():
-                            sl_crack_sens = gr.Slider(10, 100, value=50, step=5, label="裂痕灵敏度")
-                            sl_crack_rad = gr.Slider(1, 15, value=5, step=1, label="修复半径")
+                            sl_crack_sens = gr.Slider(10, 80, value=30, step=5, label="裂痕灵敏度（越低越保守）")
+                            sl_crack_rad = gr.Slider(1, 10, value=3, step=1, label="修复半径")
                         ck_stain = gr.Checkbox(label="去除深色污渍", value=False)
-                        ck_denoise = gr.Checkbox(label="去噪", value=True)
-                        sl_denoise = gr.Slider(1, 30, value=10, step=1, label="去噪强度")
-                        ck_color = gr.Checkbox(label="颜色恢复", value=True)
+                        ck_denoise = gr.Checkbox(label="轻微去噪", value=True)
+                        sl_denoise = gr.Slider(1, 20, value=5, step=1, label="去噪强度（建议 3-8）")
+                        ck_color = gr.Checkbox(label="色彩微调", value=True)
                         with gr.Row():
-                            sl_sat = gr.Slider(0.5, 2.5, value=1.3, step=0.1, label="饱和度")
-                            sl_warm = gr.Slider(0.5, 1.5, value=1.0, step=0.05, label="暖色调")
+                            sl_sat = gr.Slider(0.8, 1.8, value=1.15, step=0.05, label="饱和度")
+                            sl_warm = gr.Slider(0.8, 1.2, value=1.0, step=0.05, label="暖色调")
                         ck_gold = gr.Checkbox(label="金色增强", value=False)
-                        sl_gold = gr.Slider(0.5, 2.5, value=1.3, step=0.1, label="金色强度")
+                        sl_gold = gr.Slider(0.8, 2.0, value=1.2, step=0.1, label="金色强度")
                         ck_auto_cont = gr.Checkbox(label="自动对比度", value=True)
-                        ck_sharp = gr.Checkbox(label="锐化", value=True)
-                        sl_sharp = gr.Slider(0.0, 3.0, value=0.5, step=0.1, label="锐化量")
+                        ck_sharp = gr.Checkbox(label="轻微锐化", value=True)
+                        sl_sharp = gr.Slider(0.0, 2.0, value=0.3, step=0.1, label="锐化量（建议 0.2-0.5）")
                         ck_wb = gr.Checkbox(label="自动白平衡", value=False)
                     btn_oneclick = gr.Button("开始一键修复", variant="primary", size="lg")
                 with gr.Column(scale=1):
@@ -269,12 +270,12 @@ def build_app():
 
         # ==== Tab 2: 裂痕修复 ====
         with gr.Tab("裂痕修复"):
-            gr.Markdown("自动检测并修复唐卡表面的裂痕与划痕。")
+            gr.Markdown("自动检测并修复唐卡表面的裂痕与划痕。**建议先点「检测裂痕」预览，确认标记区域合理后再修复。**")
             with gr.Row():
                 with gr.Column():
                     img_crack = gr.Image(label="上传唐卡图片", type="numpy")
-                    sl_crack_det = gr.Slider(10, 100, value=50, step=5, label="检测灵敏度")
-                    sl_crack_r = gr.Slider(1, 15, value=5, step=1, label="修复半径")
+                    sl_crack_det = gr.Slider(10, 80, value=30, step=5, label="检测灵敏度（越低越保守）")
+                    sl_crack_r = gr.Slider(1, 10, value=3, step=1, label="修复半径")
                     dd_crack_m = gr.Dropdown(["telea", "ns"], value="telea", label="修复算法")
                     with gr.Row():
                         btn_detect = gr.Button("检测裂痕")
