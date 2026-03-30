@@ -425,21 +425,32 @@ def build_app():
     return app
 
 
+def find_free_port(start=7860, end=7880):
+    """找到一个未被占用的端口。"""
+    import socket
+    for p in range(start, end):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("127.0.0.1", p))
+                return p
+        except OSError:
+            continue
+    return None
+
+
 if __name__ == "__main__":
     import sys
-    import socket
 
-    port = 7860
-
-    for try_port in range(port, port + 10):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            if s.connect_ex(("127.0.0.1", try_port)) != 0:
-                port = try_port
-                break
+    port = find_free_port()
+    if port is None:
+        print("错误：端口 7860-7880 全部被占用。")
+        print("请先关闭之前的 python 进程，或在任务管理器中结束 python.exe")
+        sys.exit(1)
 
     print("=" * 50)
     print("  唐卡修复工具 正在启动...")
-    print(f"  将使用端口: {port}")
+    print(f"  端口: {port}")
+    print(f"  地址: http://127.0.0.1:{port}")
     print("=" * 50)
 
     try:
@@ -449,23 +460,10 @@ if __name__ == "__main__":
             server_port=port,
             inbrowser=True,
             share=False,
-            theme=THEME,
-            css=CSS,
         )
     except Exception as e:
-        print(f"\n第一次启动失败，尝试简化模式...")
-        try:
-            app = build_app()
-            app.launch(
-                server_name="127.0.0.1",
-                server_port=port,
-                inbrowser=True,
-                share=False,
-            )
-        except Exception as e2:
-            print(f"\n启动失败: {e2}")
-            print("\n请尝试以下解决方法:")
-            print("1. 确认已安装所有依赖: pip install -r requirements.txt")
-            print("2. 尝试更换端口运行: python app.py")
-            print("3. 检查防火墙是否阻止了端口访问")
-            sys.exit(1)
+        print(f"\n启动失败: {e}")
+        print("\n请尝试以下解决方法:")
+        print("1. 打开任务管理器，结束所有 python.exe 进程，然后重试")
+        print("2. 确认已安装所有依赖: pip install -r requirements.txt")
+        sys.exit(1)
