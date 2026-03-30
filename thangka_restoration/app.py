@@ -26,6 +26,7 @@ import gradio as gr
 from restoration import (
     from_rgb, to_rgb, to_cv2,
     analyze_image, smart_restoration,
+    dehaze, reduce_yellowing, correct_color_cast,
     detect_cracks, inpaint_cracks, auto_repair_cracks, manual_inpaint,
     restore_colors, adaptive_color_restore, auto_white_balance,
     enhance_gold, enhance_red_blue,
@@ -68,34 +69,43 @@ def smart_restore_fn(image):
     report += f"- 对比度: {info['contrast']:.0f}"
     report += f" {'⚠️ 对比度低' if info['is_low_contrast'] else ''}\n"
     report += f"- 饱和度: {info['saturation']:.0f}"
-    report += f" {'⚠️ 色彩褪色' if info['is_faded'] else ''}\n"
+    report += f" {'⚠️ 严重褪色' if info.get('is_very_faded') else ('⚠️ 色彩褪色' if info['is_faded'] else '')}\n"
     report += f"- 清晰度: {info['sharpness']:.0f}"
-    report += f" {'⚠️ 模糊' if info['is_blurry'] else ''}"
-    report += f" {'⚠️ 噪点多' if info['is_noisy'] else ''}\n"
+    report += f" {'⚠️ 模糊' if info['is_blurry'] else ''}\n"
+    report += f"- 灰蒙程度: {info['haziness']:.0f}"
+    report += f" {'⚠️ 有灰蒙层' if info['is_hazy'] else ''}\n"
+    report += f"- 泛黄偏移: {info['yellow_bias']:.1f}"
+    report += f" {'⚠️ 泛黄' if info['is_yellowed'] else ''}\n"
     report += "\n**已自动执行的修复操作：**\n"
+    if info.get('is_hazy') or info['haziness'] > 20:
+        report += "- ✅ **去灰蒙**（去除表面氧化积灰层）\n"
+    if info.get('is_yellowed'):
+        report += "- ✅ **去泛黄**（校正老化黄变）\n"
     report += "- ✅ 去噪\n"
     if info['is_dark']:
         report += "- ✅ 亮度提升\n"
-    if info['is_faded']:
-        report += "- ✅ 自适应色彩恢复（强力）\n"
+    if info.get('is_very_faded'):
+        report += "- ✅ **强力色彩恢复**\n"
+    elif info['is_faded']:
+        report += "- ✅ 自适应色彩恢复\n"
     else:
         report += "- ✅ 色彩增强\n"
     report += "- ✅ 金色光泽增强\n"
     report += "- ✅ 红蓝色增强\n"
     if info['is_low_contrast']:
-        report += "- ✅ CLAHE 自适应对比度（强力）\n"
+        report += "- ✅ CLAHE 自适应对比度\n"
     else:
         report += "- ✅ 自动对比度\n"
-    if info['is_blurry']:
-        report += "- ✅ 锐化增强（强力）\n"
-    else:
-        report += "- ✅ 锐化增强\n"
+    report += "- ✅ 锐化增强\n"
 
     return to_rgb(result), report
 
 
 def one_click_restore(image, crack_repair, crack_sens, crack_rad,
-                      stain_removal, do_denoise, denoise_str,
+                      stain_removal,
+                      do_dehaze_opt, dehaze_str,
+                      do_deyellow_opt, deyellow_str,
+                      do_denoise, denoise_str,
                       color_restore, sat, warm,
                       gold_enhance, gold_int,
                       auto_cont, do_sharp, sharp_amt, white_bal):
@@ -108,6 +118,10 @@ def one_click_restore(image, crack_repair, crack_sens, crack_rad,
         crack_sensitivity=int(crack_sens),
         crack_radius=int(crack_rad),
         do_stain_removal=stain_removal,
+        do_dehaze=do_dehaze_opt,
+        dehaze_strength=dehaze_str,
+        do_deyellow=do_deyellow_opt,
+        deyellow_strength=deyellow_str,
         do_denoise=do_denoise,
         denoise_strength=int(denoise_str),
         do_color_restore=color_restore,
@@ -299,6 +313,12 @@ def build_app():
                             sl_crack_sens = gr.Slider(10, 80, value=30, step=5, label="裂痕灵敏度")
                             sl_crack_rad = gr.Slider(1, 10, value=3, step=1, label="修复半径")
                         ck_stain = gr.Checkbox(label="去除深色污渍", value=False)
+                        gr.Markdown("---")
+                        ck_dehaze = gr.Checkbox(label="去灰蒙（去除氧化积灰层）", value=True)
+                        sl_dehaze = gr.Slider(0.1, 0.95, value=0.7, step=0.05, label="去灰蒙强度")
+                        ck_deyellow = gr.Checkbox(label="去泛黄（校正老化黄变）", value=True)
+                        sl_deyellow = gr.Slider(0.1, 1.0, value=0.5, step=0.1, label="去泛黄强度")
+                        gr.Markdown("---")
                         ck_denoise = gr.Checkbox(label="去噪", value=True)
                         sl_denoise = gr.Slider(1, 20, value=7, step=1, label="去噪强度")
                         ck_color = gr.Checkbox(label="色彩恢复", value=True)
@@ -318,7 +338,10 @@ def build_app():
             btn_oneclick.click(
                 one_click_restore,
                 inputs=[img_oneclick, ck_crack, sl_crack_sens, sl_crack_rad,
-                        ck_stain, ck_denoise, sl_denoise,
+                        ck_stain,
+                        ck_dehaze, sl_dehaze,
+                        ck_deyellow, sl_deyellow,
+                        ck_denoise, sl_denoise,
                         ck_color, sl_sat, sl_warm,
                         ck_gold, sl_gold,
                         ck_auto_cont, ck_sharp, sl_sharp, ck_wb],
