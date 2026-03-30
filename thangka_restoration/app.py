@@ -220,7 +220,7 @@ def remove_yellow_fn(image, radius):
 # ---------------------------------------------------------------------------
 
 def build_app():
-    with gr.Blocks(theme=THEME, css=CSS, title="唐卡修复工具") as app:
+    with gr.Blocks() as app:
         gr.Markdown(
             """
             # 🎨 唐卡修复工具
@@ -448,12 +448,24 @@ if __name__ == "__main__":
             server_name="127.0.0.1",
             server_port=port,
             inbrowser=True,
-            share=True,
+            share=False,
+            theme=THEME,
+            css=CSS,
         )
     except Exception as e:
-        print(f"\n启动失败: {e}")
-        print("\n请尝试以下解决方法:")
-        print("1. 确认已安装所有依赖: pip install -r requirements.txt")
-        print("2. 尝试更换端口运行: python app.py")
-        print("3. 检查防火墙是否阻止了端口访问")
-        sys.exit(1)
+        print(f"\n第一次启动失败，尝试简化模式...")
+        try:
+            app = build_app()
+            app.launch(
+                server_name="127.0.0.1",
+                server_port=port,
+                inbrowser=True,
+                share=False,
+            )
+        except Exception as e2:
+            print(f"\n启动失败: {e2}")
+            print("\n请尝试以下解决方法:")
+            print("1. 确认已安装所有依赖: pip install -r requirements.txt")
+            print("2. 尝试更换端口运行: python app.py")
+            print("3. 检查防火墙是否阻止了端口访问")
+            sys.exit(1)
