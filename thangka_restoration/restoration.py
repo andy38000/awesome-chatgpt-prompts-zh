@@ -630,49 +630,35 @@ def full_restoration_pipeline(
 
 def smart_restoration(image: np.ndarray) -> np.ndarray:
     """
-    智能修复模式 V3：
-    核心原则：唐卡是暖色调绘画，修复要还原它本来的面貌，
-    不是变成冷色调的"高清照片"。
+    智能修复模式 V4：
+    核心原则：
+    - 绝不模糊！唐卡的笔触纹理是灵魂，必须100%保留
+    - 保留暖色调，唐卡就应该是暖色的
+    - 只做：去灰蒙 + 色彩微调 + 对比度 + 清晰化
 
-    步骤：
-    1. 轻微去噪（保护细节）
-    2. 温和去灰蒙（只去灰不去暖色）
-    3. 轻微亮度校正
-    4. 温和色彩增强（不改变色调方向）
-    5. 局部对比度提升（让细节更清晰）
-    6. 超级清晰度
+    绝对禁止：去噪、大面积平滑、过度色偏校正
     """
     info = analyze_image(image)
     result = image.copy()
 
-    result = denoise(result, 5)
-
     if info["haziness"] > 30:
-        haze_str = min(0.45, 0.2 + info["haziness"] / 400.0)
+        haze_str = min(0.35, 0.15 + info["haziness"] / 500.0)
         result = dehaze(result, strength=haze_str)
 
     if info["is_dark"]:
-        result = auto_brightness(result, target=120.0)
+        result = auto_brightness(result, target=115.0)
 
     if info["is_very_faded"]:
-        result = restore_colors(result, saturation=1.5, warmth=1.0)
+        result = restore_colors(result, saturation=1.4, warmth=1.0)
     elif info["is_faded"]:
-        result = restore_colors(result, saturation=1.3, warmth=1.0)
+        result = restore_colors(result, saturation=1.25, warmth=1.0)
     else:
-        result = restore_colors(result, saturation=1.15, warmth=1.0)
+        result = restore_colors(result, saturation=1.1, warmth=1.0)
 
-    result = enhance_gold(result, intensity=1.1)
+    result = auto_contrast(result, clip_percent=0.5)
 
-    if info["is_low_contrast"]:
-        result = adaptive_histogram_eq(result, clip_limit=2.0, tile_size=8)
-    else:
-        result = auto_contrast(result, clip_percent=0.8)
-
-    if info["is_blurry"]:
-        result = super_clarity(result, strength=1.2, detail_boost=1.0,
-                               edge_boost=0.8, local_contrast=2.0, micro_texture=0.5)
-    else:
-        result = super_clarity(result, strength=0.7, detail_boost=0.8,
-                               edge_boost=0.5, local_contrast=1.5, micro_texture=0.4)
+    result = super_clarity(result, strength=0.5, denoise_first=False,
+                           detail_boost=0.6, edge_boost=0.4,
+                           local_contrast=1.5, micro_texture=0.3)
 
     return result
