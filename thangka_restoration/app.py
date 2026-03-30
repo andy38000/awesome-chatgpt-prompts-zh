@@ -12,6 +12,13 @@
 - 污渍去除
 """
 
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
 import cv2
 import numpy as np
 import gradio as gr
@@ -418,10 +425,34 @@ def build_app():
 
 
 if __name__ == "__main__":
-    app = build_app()
-    app.launch(
-        server_name="127.0.0.1",
-        server_port=7860,
-        inbrowser=True,
-        share=True,
-    )
+    import sys
+    import socket
+
+    port = 7860
+
+    for try_port in range(port, port + 10):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if s.connect_ex(("127.0.0.1", try_port)) != 0:
+                port = try_port
+                break
+
+    print("=" * 50)
+    print("  唐卡修复工具 正在启动...")
+    print(f"  将使用端口: {port}")
+    print("=" * 50)
+
+    try:
+        app = build_app()
+        app.launch(
+            server_name="127.0.0.1",
+            server_port=port,
+            inbrowser=True,
+            share=True,
+        )
+    except Exception as e:
+        print(f"\n启动失败: {e}")
+        print("\n请尝试以下解决方法:")
+        print("1. 确认已安装所有依赖: pip install -r requirements.txt")
+        print("2. 尝试更换端口运行: python app.py")
+        print("3. 检查防火墙是否阻止了端口访问")
+        sys.exit(1)
