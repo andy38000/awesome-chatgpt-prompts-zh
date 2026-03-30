@@ -107,30 +107,34 @@ def _estimate_atmospheric_light(image: np.ndarray, dark_channel: np.ndarray) -> 
     return atmospheric
 
 
-def dehaze(image: np.ndarray, strength: float = 0.7) -> np.ndarray:
+def dehaze(image: np.ndarray, strength: float = 0.4) -> np.ndarray:
     """
-    基于暗通道先验的去雾算法。
-    对于老旧唐卡，表面积灰和氧化层相当于"雾"。
-    strength: 0-1，去雾强度。0.7 是一个自然的值。
+    温和去雾：去除灰蒙层但保护唐卡本身的暖色基调。
+    通过与原图混合来控制强度，避免颜色偏移。
+    strength: 0-1，建议唐卡用 0.3-0.5。
     """
     img_float = image.astype(np.float64) / 255.0
     dark = _get_dark_channel(image, 15)
     atmospheric = _estimate_atmospheric_light(image, dark) / 255.0
 
-    omega = np.clip(strength, 0.1, 0.95)
+    omega = np.clip(strength, 0.1, 0.7)
     norm_img = img_float / (atmospheric + 1e-6)
     dark_norm = _get_dark_channel((norm_img * 255).astype(np.uint8), 15) / 255.0
     transmission = 1.0 - omega * dark_norm
-    transmission = np.clip(transmission, 0.1, 1.0)
+    transmission = np.clip(transmission, 0.2, 1.0)
 
     transmission = cv2.GaussianBlur(transmission, (0, 0), sigmaX=40)
 
-    result = np.zeros_like(img_float)
+    dehazed = np.zeros_like(img_float)
     for c in range(3):
-        result[:, :, c] = (img_float[:, :, c] - atmospheric[c]) / (transmission + 1e-6) + atmospheric[c]
+        dehazed[:, :, c] = (img_float[:, :, c] - atmospheric[c]) / (transmission + 1e-6) + atmospheric[c]
 
-    result = np.clip(result * 255, 0, 255).astype(np.uint8)
-    return result
+    dehazed = np.clip(dehazed, 0, 1)
+
+    blend = 0.5 + strength * 0.3
+    result = img_float * (1 - blend) + dehazed * blend
+
+    return np.clip(result * 255, 0, 255).astype(np.uint8)
 
 
 # ---------------------------------------------------------------------------
@@ -155,16 +159,17 @@ def correct_color_cast(image: np.ndarray, strength: float = 1.0) -> np.ndarray:
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
-def reduce_yellowing(image: np.ndarray, strength: float = 0.6) -> np.ndarray:
+def reduce_yellowing(image: np.ndarray, strength: float = 0.3) -> np.ndarray:
     """
-    专门针对泛黄的校正。
-    只减少LAB空间中b通道的正偏移（黄色方向），保留其他色彩。
+    温和去泛黄：只轻微校正，唐卡本身的暖色调是正常的，不应该去掉。
+    只处理b通道中超过阈值的部分，保留正常暖色。
     """
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
 
     b_mean = np.mean(lab[:, :, 2]) - 128
-    if b_mean > 0:
-        lab[:, :, 2] -= b_mean * strength
+    if b_mean > 8:
+        correction = (b_mean - 8) * strength * 0.5
+        lab[:, :, 2] -= correction
 
     lab = np.clip(lab, 0, 255).astype(np.uint8)
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
@@ -569,13 +574,13 @@ def full_restoration_pipeline(
     crack_radius: int = 3,
     do_stain_removal: bool = False,
     do_dehaze: bool = True,
-    dehaze_strength: float = 0.7,
-    do_deyellow: bool = True,
-    deyellow_strength: float = 0.5,
+    dehaze_strength: float = 0.35,
+    do_deyellow: bool = False,
+    deyellow_strength: float = 0.3,
     do_denoise: bool = True,
-    denoise_strength: int = 7,
+    denoise_strength: int = 5,
     do_color_restore: bool = True,
-    saturation: float = 1.4,
+    saturation: float = 1.2,
     warmth: float = 1.0,
     do_gold_enhance: bool = True,
     gold_intensity: float = 1.15,
@@ -625,55 +630,49 @@ def full_restoration_pipeline(
 
 def smart_restoration(image: np.ndarray) -> np.ndarray:
     """
-    智能修复模式 V2：
-    1. 去灰蒙（去雾算法）— 最关键的一步
-    2. 色偏校正（去黄）
-    3. 去噪
-    4. 自适应色彩恢复
-    5. 特色区域增强（金色、红蓝）
-    6. 自适应对比度
-    7. 锐化
+    智能修复模式 V3：
+    核心原则：唐卡是暖色调绘画，修复要还原它本来的面貌，
+    不是变成冷色调的"高清照片"。
+
+    步骤：
+    1. 轻微去噪（保护细节）
+    2. 温和去灰蒙（只去灰不去暖色）
+    3. 轻微亮度校正
+    4. 温和色彩增强（不改变色调方向）
+    5. 局部对比度提升（让细节更清晰）
+    6. 超级清晰度
     """
     info = analyze_image(image)
     result = image.copy()
 
-    if info["is_hazy"] or info["haziness"] > 20:
-        haze_str = min(0.85, 0.5 + info["haziness"] / 200.0)
+    result = denoise(result, 5)
+
+    if info["haziness"] > 30:
+        haze_str = min(0.45, 0.2 + info["haziness"] / 400.0)
         result = dehaze(result, strength=haze_str)
 
-    if info["is_yellowed"]:
-        yellow_str = min(0.8, info["yellow_bias"] / 40.0)
-        result = reduce_yellowing(result, strength=yellow_str)
-
-    if abs(info["color_cast_a"]) > 5 or abs(info["color_cast_b"]) > 5:
-        cast_str = min(0.7, max(abs(info["color_cast_a"]), abs(info["color_cast_b"])) / 20.0)
-        result = correct_color_cast(result, strength=cast_str)
-
-    result = denoise(result, 7)
-
     if info["is_dark"]:
-        result = auto_brightness(result, target=130.0)
+        result = auto_brightness(result, target=120.0)
 
     if info["is_very_faded"]:
-        result = adaptive_color_restore(result, target_saturation=110.0)
+        result = restore_colors(result, saturation=1.5, warmth=1.0)
     elif info["is_faded"]:
-        result = adaptive_color_restore(result, target_saturation=95.0)
+        result = restore_colors(result, saturation=1.3, warmth=1.0)
     else:
-        result = restore_colors(result, saturation=1.35)
+        result = restore_colors(result, saturation=1.15, warmth=1.0)
 
-    result = enhance_gold(result, intensity=1.15)
-    result = enhance_red_blue(result, intensity=1.2)
+    result = enhance_gold(result, intensity=1.1)
 
     if info["is_low_contrast"]:
-        result = adaptive_histogram_eq(result, clip_limit=2.5, tile_size=8)
+        result = adaptive_histogram_eq(result, clip_limit=2.0, tile_size=8)
     else:
-        result = auto_contrast(result, clip_percent=1.0)
+        result = auto_contrast(result, clip_percent=0.8)
 
     if info["is_blurry"]:
-        result = super_clarity(result, strength=1.5, detail_boost=1.3,
-                               edge_boost=1.2, local_contrast=3.0, micro_texture=0.8)
+        result = super_clarity(result, strength=1.2, detail_boost=1.0,
+                               edge_boost=0.8, local_contrast=2.0, micro_texture=0.5)
     else:
-        result = super_clarity(result, strength=1.0, detail_boost=1.0,
-                               edge_boost=0.8, local_contrast=2.5, micro_texture=0.6)
+        result = super_clarity(result, strength=0.7, detail_boost=0.8,
+                               edge_boost=0.5, local_contrast=1.5, micro_texture=0.4)
 
     return result

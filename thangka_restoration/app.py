@@ -100,26 +100,24 @@ def smart_restore_fn(image):
     report += f"- 泛黄偏移: {info['yellow_bias']:.1f}"
     report += f" {'⚠️ 泛黄' if info['is_yellowed'] else ''}\n"
     report += "\n**已自动执行的修复操作：**\n"
-    if info.get('is_hazy') or info['haziness'] > 20:
-        report += "- ✅ **去灰蒙**（去除表面氧化积灰层）\n"
-    if info.get('is_yellowed'):
-        report += "- ✅ **去泛黄**（校正老化黄变）\n"
-    report += "- ✅ 去噪\n"
+    report += "- ✅ 轻微去噪\n"
+    if info['haziness'] > 30:
+        report += "- ✅ 温和去灰蒙（保留暖色调）\n"
     if info['is_dark']:
         report += "- ✅ 亮度提升\n"
     if info.get('is_very_faded'):
-        report += "- ✅ **强力色彩恢复**\n"
+        report += "- ✅ 色彩恢复（饱和度+50%）\n"
     elif info['is_faded']:
-        report += "- ✅ 自适应色彩恢复\n"
+        report += "- ✅ 色彩恢复（饱和度+30%）\n"
     else:
-        report += "- ✅ 色彩增强\n"
-    report += "- ✅ 金色光泽增强\n"
-    report += "- ✅ 红蓝色增强\n"
+        report += "- ✅ 色彩微调（饱和度+15%）\n"
+    report += "- ✅ 金色光泽微调\n"
     if info['is_low_contrast']:
-        report += "- ✅ CLAHE 自适应对比度\n"
+        report += "- ✅ CLAHE 局部对比度增强\n"
     else:
         report += "- ✅ 自动对比度\n"
-    report += "- ✅ **超级清晰度**（多尺度锐化+高频提取+边缘增强+局部对比度）\n"
+    report += "- ✅ 超级清晰度\n"
+    report += "\n*设计原则：保留唐卡原有暖色调，不做过度校正*"
 
     return to_rgb(result), report
 
@@ -396,16 +394,16 @@ def build_app():
                             sl_crack_rad = gr.Slider(1, 10, value=3, step=1, label="修复半径")
                         ck_stain = gr.Checkbox(label="去除深色污渍", value=False)
                         gr.Markdown("---")
-                        ck_dehaze = gr.Checkbox(label="去灰蒙（去除氧化积灰层）", value=True)
-                        sl_dehaze = gr.Slider(0.1, 0.95, value=0.7, step=0.05, label="去灰蒙强度")
-                        ck_deyellow = gr.Checkbox(label="去泛黄（校正老化黄变）", value=True)
-                        sl_deyellow = gr.Slider(0.1, 1.0, value=0.5, step=0.1, label="去泛黄强度")
+                        ck_dehaze = gr.Checkbox(label="去灰蒙（轻微去除表面灰层）", value=True)
+                        sl_dehaze = gr.Slider(0.1, 0.6, value=0.35, step=0.05, label="去灰蒙强度（唐卡建议0.2-0.4）")
+                        ck_deyellow = gr.Checkbox(label="去泛黄（慎用，会改变暖色调）", value=False)
+                        sl_deyellow = gr.Slider(0.1, 0.6, value=0.3, step=0.05, label="去泛黄强度（建议0.2-0.3）")
                         gr.Markdown("---")
                         ck_denoise = gr.Checkbox(label="去噪", value=True)
-                        sl_denoise = gr.Slider(1, 20, value=7, step=1, label="去噪强度")
+                        sl_denoise = gr.Slider(1, 20, value=5, step=1, label="去噪强度")
                         ck_color = gr.Checkbox(label="色彩恢复", value=True)
                         with gr.Row():
-                            sl_sat = gr.Slider(0.8, 2.5, value=1.4, step=0.05, label="饱和度")
+                            sl_sat = gr.Slider(0.8, 2.0, value=1.2, step=0.05, label="饱和度")
                             sl_warm = gr.Slider(0.8, 1.3, value=1.0, step=0.05, label="暖色调")
                         ck_gold = gr.Checkbox(label="金色增强", value=True)
                         sl_gold = gr.Slider(0.8, 2.0, value=1.15, step=0.05, label="金色强度")
