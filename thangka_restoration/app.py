@@ -179,30 +179,68 @@ def crack_repair_fn(image, sensitivity, radius, method):
     return to_rgb(result)
 
 
-def manual_inpaint_fn(editor_data, radius, method):
-    if editor_data is None:
+def manual_inpaint_fn(image, mask_image, radius, method):
+    """用户分别上传原图和掩膜图（在任意画图软件中用白色/红色标记损坏区域）。"""
+    if image is None or mask_image is None:
         return None
 
-    composite = editor_data.get("composite", None)
-    layers = editor_data.get("layers", [])
+    bgr = from_rgb(image)
+    bgr = resize_if_needed(bgr)
 
-    if composite is None:
-        return None
+    mask_resized = cv2.resize(mask_image, (bgr.shape[1], bgr.shape[0]))
 
-    bg = editor_data.get("background", composite)
-    bgr = from_rgb(bg)
-
-    if layers and len(layers) > 0:
-        layer = layers[0]
-        if len(layer.shape) == 3 and layer.shape[2] == 4:
-            mask = layer[:, :, 3]
-        else:
-            mask = cv2.cvtColor(layer, cv2.COLOR_RGB2GRAY)
+    if len(mask_resized.shape) == 3:
+        gray_mask = cv2.cvtColor(mask_resized, cv2.COLOR_RGB2GRAY)
     else:
-        gray_comp = cv2.cvtColor(composite, cv2.COLOR_RGB2GRAY)
-        gray_bg = cv2.cvtColor(bg, cv2.COLOR_RGB2GRAY)
-        mask = cv2.absdiff(gray_comp, gray_bg)
-        _, mask = cv2.threshold(mask, 10, 255, cv2.THRESH_BINARY)
+        gray_mask = mask_resized
+
+    _, binary_mask = cv2.threshold(gray_mask, 30, 255, cv2.THRESH_BINARY)
+
+    result = manual_inpaint(bgr, binary_mask, int(radius), method)
+    return to_rgb(result)
+
+
+def auto_damage_detect_fn(image, threshold):
+    """自动检测损伤区域：查找与周围颜色差异大的斑块。"""
+    if image is None:
+        return None, None
+
+    bgr = from_rgb(image)
+    bgr = resize_if_needed(bgr)
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+
+    blurred = cv2.medianBlur(gray, 15)
+    diff = cv2.absdiff(gray, blurred)
+
+    _, mask = cv2.threshold(diff, int(threshold), 255, cv2.THRESH_BINARY)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    mask = cv2.dilate(mask, kernel, iterations=1)
+
+    overlay = bgr.copy()
+    overlay[mask > 0] = [0, 0, 255]
+    blended = cv2.addWeighted(bgr, 0.6, overlay, 0.4, 0)
+
+    return to_rgb(blended), mask
+
+
+def auto_damage_repair_fn(image, threshold, radius, method):
+    """自动检测损伤并修复。"""
+    if image is None:
+        return None
+
+    bgr = from_rgb(image)
+    bgr = resize_if_needed(bgr)
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+
+    blurred = cv2.medianBlur(gray, 15)
+    diff = cv2.absdiff(gray, blurred)
+    _, mask = cv2.threshold(diff, int(threshold), 255, cv2.THRESH_BINARY)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    mask = cv2.dilate(mask, kernel, iterations=1)
 
     result = manual_inpaint(bgr, mask, int(radius), method)
     return to_rgb(result)
@@ -412,22 +450,55 @@ def build_app():
             btn_repair.click(crack_repair_fn, [img_crack, sl_crack_det, sl_crack_r, dd_crack_m], [out_crack_fix])
 
         # ==== Tab 3: 手动修复 ====
-        with gr.Tab("手动区域修复"):
-            gr.Markdown("使用画笔在图片上标记需要修复的区域，然后点击修复。")
-            with gr.Row():
-                with gr.Column():
-                    img_manual = gr.ImageEditor(
-                        label="在图片上标记损坏区域（使用画笔工具）",
-                        type="numpy",
-                        brush=gr.Brush(default_size=15, colors=["#FF0000"]),
-                    )
-                    sl_manual_r = gr.Slider(1, 20, value=7, step=1, label="修复半径")
-                    dd_manual_m = gr.Dropdown(["telea", "ns"], value="telea", label="修复算法")
-                    btn_manual = gr.Button("修复标记区域", variant="primary")
-                with gr.Column():
-                    out_manual = gr.Image(label="修复结果", type="numpy")
+        with gr.Tab("区域修复"):
+            gr.Markdown(
+                "**两种方式修复局部损伤区域：**\n\n"
+                "**方式一（推荐）：自动检测损伤** — 自动找到颜料脱落/污渍区域并修复\n\n"
+                "**方式二：手动掩膜** — 用画图软件在图片上涂白色标记损坏区域，分别上传原图和标记图"
+            )
 
-            btn_manual.click(manual_inpaint_fn, [img_manual, sl_manual_r, dd_manual_m], [out_manual])
+            with gr.Accordion("方式一：自动检测损伤区域（推荐）", open=True):
+                with gr.Row():
+                    with gr.Column():
+                        img_auto_dmg = gr.Image(label="上传唐卡图片", type="numpy")
+                        sl_dmg_thresh = gr.Slider(5, 60, value=20, step=5,
+                                                  label="检测阈值（越低检测越多）")
+                        sl_dmg_rad = gr.Slider(1, 20, value=8, step=1, label="修复半径")
+                        dd_dmg_m = gr.Dropdown(["telea", "ns"], value="ns", label="修复算法")
+                        with gr.Row():
+                            btn_dmg_detect = gr.Button("检测损伤（预览）")
+                            btn_dmg_repair = gr.Button("检测并修复", variant="primary")
+                    with gr.Column():
+                        out_dmg_preview = gr.Image(label="损伤检测预览（红色=检测到的损伤）", type="numpy")
+                        out_dmg_result = gr.Image(label="修复结果", type="numpy")
+
+                btn_dmg_detect.click(auto_damage_detect_fn,
+                                     [img_auto_dmg, sl_dmg_thresh],
+                                     [out_dmg_preview])
+                btn_dmg_repair.click(auto_damage_repair_fn,
+                                     [img_auto_dmg, sl_dmg_thresh, sl_dmg_rad, dd_dmg_m],
+                                     [out_dmg_result])
+
+            with gr.Accordion("方式二：手动上传掩膜图", open=False):
+                gr.Markdown(
+                    "1. 用 Windows 画图 / PS / 手机修图 打开唐卡图片\n"
+                    "2. 用**白色画笔**涂抹损坏区域\n"
+                    "3. 保存这张标记后的图片\n"
+                    "4. 在下方分别上传**原图**和**标记图**"
+                )
+                with gr.Row():
+                    with gr.Column():
+                        img_manual_orig = gr.Image(label="上传原图", type="numpy")
+                        img_manual_mask = gr.Image(label="上传标记图（白色=需要修复的区域）", type="numpy")
+                        sl_manual_r = gr.Slider(1, 20, value=8, step=1, label="修复半径")
+                        dd_manual_m = gr.Dropdown(["telea", "ns"], value="ns", label="修复算法")
+                        btn_manual = gr.Button("修复标记区域", variant="primary")
+                    with gr.Column():
+                        out_manual = gr.Image(label="修复结果", type="numpy")
+
+                btn_manual.click(manual_inpaint_fn,
+                                 [img_manual_orig, img_manual_mask, sl_manual_r, dd_manual_m],
+                                 [out_manual])
 
         # ==== Tab 4: 颜色恢复 ====
         with gr.Tab("颜色恢复"):
