@@ -552,33 +552,17 @@ if __name__ == "__main__":
     print(f"  地址: http://127.0.0.1:{port}")
     print("=" * 50)
 
-    import os
-    os.environ["GRADIO_SSR_MODE"] = "false"
-    os.environ["GRADIO_TEMP_DIR"] = os.path.join(os.path.expanduser("~"), ".gradio_tmp")
-
-    launch_kwargs = dict(
-        server_name="127.0.0.1",
-        server_port=port,
-        inbrowser=True,
-        share=False,
-        max_file_size="50mb",
-    )
-
-    try:
-        import inspect
-        sig = inspect.signature(gr.Blocks.launch)
-        if "ssr_mode" in sig.parameters:
-            launch_kwargs["ssr_mode"] = False
-    except Exception:
-        pass
-
     try:
         app = build_app()
-        app.launch(**launch_kwargs)
+        app.launch(
+            server_name="127.0.0.1",
+            server_port=port,
+            inbrowser=True,
+            share=False,
+        )
     except Exception as e:
         print(f"\n启动失败: {e}")
         print("\n请尝试以下解决方法:")
         print("1. 打开任务管理器，结束所有 python.exe 进程，然后重试")
-        print("2. 确认已安装所有依赖: pip install -r requirements.txt")
-        print("3. 升级 gradio: pip install --upgrade gradio")
+        print("2. 运行: pip install \"gradio>=4.0.0,<5.0.0\"")
         sys.exit(1)
