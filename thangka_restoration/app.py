@@ -203,7 +203,7 @@ def manual_inpaint_fn(image, mask_image, radius, method):
 def auto_damage_detect_fn(image, threshold):
     """自动检测损伤区域：查找与周围颜色差异大的斑块。"""
     if image is None:
-        return None, None
+        return None
 
     bgr = from_rgb(image)
     bgr = resize_if_needed(bgr)
@@ -222,7 +222,7 @@ def auto_damage_detect_fn(image, threshold):
     overlay[mask > 0] = [0, 0, 255]
     blended = cv2.addWeighted(bgr, 0.6, overlay, 0.4, 0)
 
-    return to_rgb(blended), mask
+    return to_rgb(blended)
 
 
 def auto_damage_repair_fn(image, threshold, radius, method):
