@@ -4,7 +4,7 @@
 提供裂痕修复、颜色恢复、去噪、去污渍、边缘增强、对比度调整等功能，
 适用于受损唐卡图像的数字化修复。
 
-设计原则：保守修复，宁可少修也不要破坏原画。
+设计原则：显著提升画面品质，同时保护绘画结构不被破坏。
 """
 
 import cv2
@@ -34,20 +34,51 @@ def from_rgb(image: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# 0. 智能图像分析
+# ---------------------------------------------------------------------------
+
+def analyze_image(image: np.ndarray) -> dict:
+    """
+    分析图像的退化程度，返回建议的修复参数。
+    用于智能修复模式，自动判断该加强哪些方面。
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+    brightness = np.mean(gray)
+    contrast = np.std(gray.astype(np.float32))
+    avg_saturation = np.mean(hsv[:, :, 1])
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+    is_dark = brightness < 100
+    is_bright = brightness > 180
+    is_low_contrast = contrast < 40
+    is_faded = avg_saturation < 60
+    is_blurry = laplacian_var < 100
+    is_noisy = laplacian_var > 2000
+
+    return {
+        "brightness": brightness,
+        "contrast": contrast,
+        "saturation": avg_saturation,
+        "sharpness": laplacian_var,
+        "is_dark": is_dark,
+        "is_bright": is_bright,
+        "is_low_contrast": is_low_contrast,
+        "is_faded": is_faded,
+        "is_blurry": is_blurry,
+        "is_noisy": is_noisy,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 1. 裂痕检测与修复
 # ---------------------------------------------------------------------------
 
 def detect_cracks(image: np.ndarray, sensitivity: int = 30) -> np.ndarray:
     """
     针对唐卡优化的裂痕检测。
-
-    核心思路：真正的裂痕是穿越不同颜色区域的细窄亮线/暗线，
-    而绘画线条是构成图案的有意笔触。通过以下策略区分：
-    1. 用形态学黑帽/白帽变换提取比周围亮或暗的细线
-    2. 只保留细长结构（高长宽比），过滤掉大块区域
-    3. 过滤掉太大的连通区域（那是绘画本身的线条）
-
-    sensitivity: 1-100，越大检测越多（但也越容易误伤）
+    用形态学黑帽/白帽变换提取细窄异常线条，通过连通域分析过滤绘画线条。
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
@@ -101,10 +132,7 @@ def detect_cracks(image: np.ndarray, sensitivity: int = 30) -> np.ndarray:
 
 def inpaint_cracks(image: np.ndarray, mask: np.ndarray, radius: int = 3,
                    method: str = "telea") -> np.ndarray:
-    """
-    使用图像修复算法修复裂痕区域。
-    method: "telea" (快速行进法) 或 "ns" (Navier-Stokes)
-    """
+    """使用图像修复算法修复裂痕区域。"""
     if len(mask.shape) == 3:
         mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
     _, binary_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
@@ -116,13 +144,13 @@ def inpaint_cracks(image: np.ndarray, mask: np.ndarray, radius: int = 3,
 
 def auto_repair_cracks(image: np.ndarray, sensitivity: int = 30,
                        radius: int = 3, method: str = "telea") -> np.ndarray:
-    """自动检测裂痕并修复（一步完成）。"""
+    """自动检测裂痕并修复。"""
     mask = detect_cracks(image, sensitivity)
     return inpaint_cracks(image, mask, radius, method)
 
 
 # ---------------------------------------------------------------------------
-# 2. 手动区域修复（基于用户绘制的掩膜）
+# 2. 手动区域修复
 # ---------------------------------------------------------------------------
 
 def manual_inpaint(image: np.ndarray, mask: np.ndarray,
@@ -135,20 +163,39 @@ def manual_inpaint(image: np.ndarray, mask: np.ndarray,
 # 3. 颜色恢复与增强
 # ---------------------------------------------------------------------------
 
-def restore_colors(image: np.ndarray, saturation: float = 1.15,
+def restore_colors(image: np.ndarray, saturation: float = 1.4,
                    warmth: float = 1.0) -> np.ndarray:
     """
     恢复唐卡褪色的颜色。
-    saturation: 饱和度倍数 (>1 增加, <1 减少)
-    warmth: 暖色调调整 (>1 偏暖, <1 偏冷)
+    saturation: 饱和度倍数
+    warmth: 暖色调调整
     """
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
 
     hsv[:, :, 1] = np.clip(hsv[:, :, 1] * saturation, 0, 255)
 
     if warmth != 1.0:
-        hsv[:, :, 0] = np.clip(hsv[:, :, 0] + (warmth - 1.0) * 3, 0, 179)
+        hsv[:, :, 0] = np.clip(hsv[:, :, 0] + (warmth - 1.0) * 5, 0, 179)
 
+    hsv = hsv.astype(np.uint8)
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+
+def adaptive_color_restore(image: np.ndarray, target_saturation: float = 90.0) -> np.ndarray:
+    """
+    自适应颜色恢复：根据当前图像的饱和度自动计算需要的增强倍数，
+    把平均饱和度提升到 target_saturation 附近。
+    """
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
+    current_sat = np.mean(hsv[:, :, 1])
+
+    if current_sat < 5:
+        return image
+
+    ratio = target_saturation / current_sat
+    ratio = np.clip(ratio, 1.0, 2.5)
+
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * ratio, 0, 255)
     hsv = hsv.astype(np.uint8)
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
@@ -168,21 +215,43 @@ def auto_white_balance(image: np.ndarray) -> np.ndarray:
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
-def enhance_gold(image: np.ndarray, intensity: float = 1.2) -> np.ndarray:
-    """
-    增强唐卡中金色区域的光泽。
-    通过在 HSV 空间中定位金色/黄色调并增强亮度实现。
-    """
+def enhance_gold(image: np.ndarray, intensity: float = 1.4) -> np.ndarray:
+    """增强唐卡中金色区域的光泽。"""
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-    lower_gold = np.array([15, 80, 80])
-    upper_gold = np.array([35, 255, 255])
+    lower_gold = np.array([12, 50, 60])
+    upper_gold = np.array([38, 255, 255])
     gold_mask = cv2.inRange(hsv, lower_gold, upper_gold)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    gold_mask = cv2.morphologyEx(gold_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
 
     hsv_float = hsv.astype(np.float32)
     gold_region = gold_mask > 0
     hsv_float[gold_region, 1] = np.clip(hsv_float[gold_region, 1] * intensity, 0, 255)
-    hsv_float[gold_region, 2] = np.clip(hsv_float[gold_region, 2] * intensity, 0, 255)
+    hsv_float[gold_region, 2] = np.clip(hsv_float[gold_region, 2] * min(intensity, 1.3), 0, 255)
+
+    return cv2.cvtColor(hsv_float.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+
+def enhance_red_blue(image: np.ndarray, intensity: float = 1.3) -> np.ndarray:
+    """增强唐卡中常见的红色和蓝色区域。"""
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hsv_float = hsv.astype(np.float32)
+
+    lower_red1 = np.array([0, 50, 50])
+    upper_red1 = np.array([10, 255, 255])
+    lower_red2 = np.array([160, 50, 50])
+    upper_red2 = np.array([179, 255, 255])
+    red_mask = cv2.inRange(hsv, lower_red1, upper_red1) | cv2.inRange(hsv, lower_red2, upper_red2)
+
+    lower_blue = np.array([90, 50, 50])
+    upper_blue = np.array([130, 255, 255])
+    blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+    combined = red_mask | blue_mask
+    region = combined > 0
+    hsv_float[region, 1] = np.clip(hsv_float[region, 1] * intensity, 0, 255)
 
     return cv2.cvtColor(hsv_float.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
@@ -191,7 +260,7 @@ def enhance_gold(image: np.ndarray, intensity: float = 1.2) -> np.ndarray:
 # 4. 去噪与平滑
 # ---------------------------------------------------------------------------
 
-def denoise(image: np.ndarray, strength: int = 5) -> np.ndarray:
+def denoise(image: np.ndarray, strength: int = 7) -> np.ndarray:
     """非局部均值去噪，保留细节的同时减少噪声。"""
     return cv2.fastNlMeansDenoisingColored(image, None, strength, strength, 7, 21)
 
@@ -214,11 +283,8 @@ def adjust_contrast_brightness(image: np.ndarray, contrast: float = 1.0,
     return np.clip(result, 0, 255).astype(np.uint8)
 
 
-def auto_contrast(image: np.ndarray, clip_percent: float = 0.5) -> np.ndarray:
-    """
-    自动对比度拉伸（直方图裁剪）。
-    clip_percent: 裁剪百分比，越大拉伸越强。
-    """
+def auto_contrast(image: np.ndarray, clip_percent: float = 1.0) -> np.ndarray:
+    """自动对比度拉伸。"""
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l_channel = lab[:, :, 0]
 
@@ -240,7 +306,7 @@ def auto_contrast(image: np.ndarray, clip_percent: float = 0.5) -> np.ndarray:
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
-def adaptive_histogram_eq(image: np.ndarray, clip_limit: float = 1.5,
+def adaptive_histogram_eq(image: np.ndarray, clip_limit: float = 2.0,
                           tile_size: int = 8) -> np.ndarray:
     """自适应直方图均衡化 (CLAHE)，改善局部对比度。"""
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
@@ -250,11 +316,23 @@ def adaptive_histogram_eq(image: np.ndarray, clip_limit: float = 1.5,
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
+def auto_brightness(image: np.ndarray, target: float = 120.0) -> np.ndarray:
+    """自动亮度调整，把平均亮度拉到 target 附近。"""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    current = np.mean(gray)
+    if current < 1:
+        return image
+    gamma = np.log(target / 255.0) / np.log(current / 255.0 + 1e-6)
+    gamma = np.clip(gamma, 0.3, 3.0)
+    table = np.array([((i / 255.0) ** gamma) * 255 for i in range(256)]).astype(np.uint8)
+    return cv2.LUT(image, table)
+
+
 # ---------------------------------------------------------------------------
 # 6. 边缘增强与锐化
 # ---------------------------------------------------------------------------
 
-def sharpen(image: np.ndarray, amount: float = 0.3) -> np.ndarray:
+def sharpen(image: np.ndarray, amount: float = 0.5) -> np.ndarray:
     """非锐化掩膜 (Unsharp Mask) 锐化。"""
     blurred = cv2.GaussianBlur(image, (0, 0), 3)
     result = cv2.addWeighted(image, 1.0 + amount, blurred, -amount, 0)
@@ -274,10 +352,7 @@ def detail_enhance(image: np.ndarray, sigma_s: float = 10,
 def remove_stains(image: np.ndarray, lower_thresh: tuple = (0, 0, 0),
                   upper_thresh: tuple = (30, 30, 30),
                   radius: int = 5) -> np.ndarray:
-    """
-    通过颜色阈值检测深色污渍并修复。
-    适用于墨渍、霉斑等深色污损。
-    """
+    """检测深色污渍并修复。"""
     lower = np.array(lower_thresh)
     upper = np.array(upper_thresh)
     mask = cv2.inRange(image, lower, upper)
@@ -289,7 +364,7 @@ def remove_stains(image: np.ndarray, lower_thresh: tuple = (0, 0, 0),
 
 
 def remove_yellow_stains(image: np.ndarray, radius: int = 5) -> np.ndarray:
-    """去除泛黄污渍（常见于老旧唐卡）。"""
+    """去除泛黄污渍。"""
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
     lower_yellow = np.array([18, 60, 150])
@@ -313,23 +388,21 @@ def full_restoration_pipeline(
     crack_radius: int = 3,
     do_stain_removal: bool = False,
     do_denoise: bool = True,
-    denoise_strength: int = 5,
+    denoise_strength: int = 7,
     do_color_restore: bool = True,
-    saturation: float = 1.15,
+    saturation: float = 1.4,
     warmth: float = 1.0,
-    do_gold_enhance: bool = False,
-    gold_intensity: float = 1.2,
+    do_gold_enhance: bool = True,
+    gold_intensity: float = 1.4,
     do_auto_contrast: bool = True,
     do_sharpen: bool = True,
-    sharpen_amount: float = 0.3,
+    sharpen_amount: float = 0.5,
     do_white_balance: bool = False,
 ) -> np.ndarray:
     """
     一键综合修复流水线。
-    按合理顺序依次执行选定的修复步骤。
 
-    默认配置偏保守：只做轻微去噪、色彩微调、对比度优化和轻度锐化。
-    裂痕修复和污渍去除默认关闭，需要用户明确开启。
+    默认开启：去噪、色彩恢复、金色增强、自动对比度、锐化。
     """
     result = image.copy()
 
@@ -356,5 +429,39 @@ def full_restoration_pipeline(
 
     if do_sharpen:
         result = sharpen(result, sharpen_amount)
+
+    return result
+
+
+def smart_restoration(image: np.ndarray) -> np.ndarray:
+    """
+    智能修复模式：自动分析图像退化程度，自适应调整修复参数。
+    无需手动调参，一键获得最佳修复效果。
+    """
+    info = analyze_image(image)
+    result = image.copy()
+
+    result = denoise(result, 8)
+
+    if info["is_dark"]:
+        result = auto_brightness(result, target=125.0)
+
+    if info["is_faded"]:
+        result = adaptive_color_restore(result, target_saturation=95.0)
+    else:
+        result = restore_colors(result, saturation=1.35, warmth=1.0)
+
+    result = enhance_gold(result, intensity=1.4)
+    result = enhance_red_blue(result, intensity=1.2)
+
+    if info["is_low_contrast"]:
+        result = adaptive_histogram_eq(result, clip_limit=2.5, tile_size=8)
+    else:
+        result = auto_contrast(result, clip_percent=1.0)
+
+    if info["is_blurry"]:
+        result = sharpen(result, amount=0.8)
+    else:
+        result = sharpen(result, amount=0.5)
 
     return result

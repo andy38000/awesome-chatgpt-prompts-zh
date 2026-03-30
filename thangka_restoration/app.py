@@ -25,10 +25,12 @@ import gradio as gr
 
 from restoration import (
     from_rgb, to_rgb, to_cv2,
+    analyze_image, smart_restoration,
     detect_cracks, inpaint_cracks, auto_repair_cracks, manual_inpaint,
-    restore_colors, auto_white_balance, enhance_gold,
+    restore_colors, adaptive_color_restore, auto_white_balance,
+    enhance_gold, enhance_red_blue,
     denoise, bilateral_smooth,
-    adjust_contrast_brightness, auto_contrast, adaptive_histogram_eq,
+    adjust_contrast_brightness, auto_contrast, adaptive_histogram_eq, auto_brightness,
     sharpen, detail_enhance,
     remove_stains, remove_yellow_stains,
     full_restoration_pipeline,
@@ -51,6 +53,46 @@ footer { display: none !important; }
 # ---------------------------------------------------------------------------
 # 回调函数
 # ---------------------------------------------------------------------------
+
+def smart_restore_fn(image):
+    if image is None:
+        return None, ""
+    bgr = from_rgb(image)
+    info = analyze_image(bgr)
+    result = smart_restoration(bgr)
+
+    report = "**图像分析报告：**\n"
+    report += f"- 亮度: {info['brightness']:.0f}/255"
+    report += f" {'⚠️ 偏暗' if info['is_dark'] else ''}"
+    report += f" {'⚠️ 过亮' if info['is_bright'] else ''}\n"
+    report += f"- 对比度: {info['contrast']:.0f}"
+    report += f" {'⚠️ 对比度低' if info['is_low_contrast'] else ''}\n"
+    report += f"- 饱和度: {info['saturation']:.0f}"
+    report += f" {'⚠️ 色彩褪色' if info['is_faded'] else ''}\n"
+    report += f"- 清晰度: {info['sharpness']:.0f}"
+    report += f" {'⚠️ 模糊' if info['is_blurry'] else ''}"
+    report += f" {'⚠️ 噪点多' if info['is_noisy'] else ''}\n"
+    report += "\n**已自动执行的修复操作：**\n"
+    report += "- ✅ 去噪\n"
+    if info['is_dark']:
+        report += "- ✅ 亮度提升\n"
+    if info['is_faded']:
+        report += "- ✅ 自适应色彩恢复（强力）\n"
+    else:
+        report += "- ✅ 色彩增强\n"
+    report += "- ✅ 金色光泽增强\n"
+    report += "- ✅ 红蓝色增强\n"
+    if info['is_low_contrast']:
+        report += "- ✅ CLAHE 自适应对比度（强力）\n"
+    else:
+        report += "- ✅ 自动对比度\n"
+    if info['is_blurry']:
+        report += "- ✅ 锐化增强（强力）\n"
+    else:
+        report += "- ✅ 锐化增强\n"
+
+    return to_rgb(result), report
+
 
 def one_click_restore(image, crack_repair, crack_sens, crack_rad,
                       stain_removal, do_denoise, denoise_str,
@@ -224,37 +266,52 @@ def build_app():
         gr.Markdown(
             """
             # 🎨 唐卡修复工具
-            **数字化修复受损唐卡图像** — 支持颜色恢复、去噪、对比度增强、裂痕修复等多种功能。
-            默认只做轻微增强，不会破坏原画细节。如需裂痕修复，建议先在「裂痕修复」标签页预览。
+            **数字化修复受损唐卡图像** — 自动分析图像退化情况，智能恢复色彩、清晰度和对比度。
+            推荐使用「智能修复」模式，一键获得最佳效果。
             """
         )
 
-        # ==== Tab 1: 一键修复 ====
-        with gr.Tab("一键智能修复"):
-            gr.Markdown("上传图片并调整参数，点击按钮即可完成综合修复。")
+        # ==== Tab 0: 智能修复（推荐）====
+        with gr.Tab("⭐ 智能修复（推荐）"):
+            gr.Markdown(
+                "**一键智能修复** — 自动分析图像的亮度、对比度、饱和度和清晰度，"
+                "针对性地调整修复参数，无需手动调参。"
+            )
+            with gr.Row():
+                with gr.Column(scale=1):
+                    img_smart = gr.Image(label="上传唐卡图片", type="numpy")
+                    btn_smart = gr.Button("开始智能修复", variant="primary", size="lg")
+                with gr.Column(scale=1):
+                    out_smart = gr.Image(label="修复结果", type="numpy")
+                    out_report = gr.Markdown(label="分析报告")
+
+            btn_smart.click(smart_restore_fn, [img_smart], [out_smart, out_report])
+
+        # ==== Tab 1: 自定义修复 ====
+        with gr.Tab("自定义修复"):
+            gr.Markdown("手动调整每个修复步骤的参数。")
             with gr.Row():
                 with gr.Column(scale=1):
                     img_oneclick = gr.Image(label="上传唐卡图片", type="numpy")
                     with gr.Accordion("修复选项", open=True):
-                        gr.Markdown("⚠️ **裂痕修复**默认关闭，建议先用「裂痕修复」标签页预览效果后再开启。")
                         ck_crack = gr.Checkbox(label="裂痕修复（谨慎使用）", value=False)
                         with gr.Row():
-                            sl_crack_sens = gr.Slider(10, 80, value=30, step=5, label="裂痕灵敏度（越低越保守）")
+                            sl_crack_sens = gr.Slider(10, 80, value=30, step=5, label="裂痕灵敏度")
                             sl_crack_rad = gr.Slider(1, 10, value=3, step=1, label="修复半径")
                         ck_stain = gr.Checkbox(label="去除深色污渍", value=False)
-                        ck_denoise = gr.Checkbox(label="轻微去噪", value=True)
-                        sl_denoise = gr.Slider(1, 20, value=5, step=1, label="去噪强度（建议 3-8）")
-                        ck_color = gr.Checkbox(label="色彩微调", value=True)
+                        ck_denoise = gr.Checkbox(label="去噪", value=True)
+                        sl_denoise = gr.Slider(1, 20, value=7, step=1, label="去噪强度")
+                        ck_color = gr.Checkbox(label="色彩恢复", value=True)
                         with gr.Row():
-                            sl_sat = gr.Slider(0.8, 1.8, value=1.15, step=0.05, label="饱和度")
-                            sl_warm = gr.Slider(0.8, 1.2, value=1.0, step=0.05, label="暖色调")
-                        ck_gold = gr.Checkbox(label="金色增强", value=False)
-                        sl_gold = gr.Slider(0.8, 2.0, value=1.2, step=0.1, label="金色强度")
+                            sl_sat = gr.Slider(0.8, 2.5, value=1.4, step=0.05, label="饱和度")
+                            sl_warm = gr.Slider(0.8, 1.3, value=1.0, step=0.05, label="暖色调")
+                        ck_gold = gr.Checkbox(label="金色增强", value=True)
+                        sl_gold = gr.Slider(0.8, 2.5, value=1.4, step=0.1, label="金色强度")
                         ck_auto_cont = gr.Checkbox(label="自动对比度", value=True)
-                        ck_sharp = gr.Checkbox(label="轻微锐化", value=True)
-                        sl_sharp = gr.Slider(0.0, 2.0, value=0.3, step=0.1, label="锐化量（建议 0.2-0.5）")
+                        ck_sharp = gr.Checkbox(label="锐化", value=True)
+                        sl_sharp = gr.Slider(0.0, 2.0, value=0.5, step=0.1, label="锐化量")
                         ck_wb = gr.Checkbox(label="自动白平衡", value=False)
-                    btn_oneclick = gr.Button("开始一键修复", variant="primary", size="lg")
+                    btn_oneclick = gr.Button("开始修复", variant="primary", size="lg")
                 with gr.Column(scale=1):
                     out_oneclick = gr.Image(label="修复结果", type="numpy")
 
