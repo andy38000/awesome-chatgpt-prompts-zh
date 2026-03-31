@@ -14,6 +14,8 @@ import os
 import numpy as np
 from PIL import Image
 
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
 _pipeline = None
 _device = None
 _model_loaded = False
@@ -51,14 +53,32 @@ def _load_pipeline(model_variant: str = "recommended"):
     print(f"  设备: {_device}")
     print("=" * 50)
 
-    base_model = "stabilityai/stable-diffusion-2-inpainting"
+    base_models = [
+        "stable-diffusion-v1-5/stable-diffusion-inpainting",
+        "runwayml/stable-diffusion-inpainting",
+        "stabilityai/stable-diffusion-2-inpainting",
+    ]
 
-    print(f"[1/2] 加载基础模型: {base_model}")
-    _pipeline = StableDiffusionInpaintPipeline.from_pretrained(
-        base_model,
-        torch_dtype=dtype,
-        safety_checker=None,
-    )
+    _pipeline = None
+    for base_model in base_models:
+        try:
+            print(f"[1/2] 尝试加载: {base_model}")
+            _pipeline = StableDiffusionInpaintPipeline.from_pretrained(
+                base_model,
+                torch_dtype=dtype,
+                safety_checker=None,
+            )
+            print(f"  ✅ 基础模型加载成功: {base_model}")
+            break
+        except Exception as e:
+            print(f"  ❌ 失败: {e}")
+            continue
+
+    if _pipeline is None:
+        raise RuntimeError(
+            "所有模型都无法下载。请检查网络连接。\n"
+            "或手动下载模型: https://hf-mirror.com/runwayml/stable-diffusion-inpainting"
+        )
 
     lora_repo = "Wangchuk1376/ThangkaModels"
     if model_variant == "detail":
@@ -79,8 +99,7 @@ def _load_pipeline(model_variant: str = "recommended"):
         _model_loaded = True
         print(f"  ✅ LoRA 加载成功: {lora_name}")
     except Exception as e:
-        print(f"  ⚠️ LoRA 加载失败: {e}")
-        print(f"  将使用基础 SD 2.1 模型（效果不如 LoRA 版本）")
+        print(f"  ⚠️ LoRA 加载跳过（不影响基础修复）: {e}")
         _model_loaded = False
 
     if _device == "cpu":
