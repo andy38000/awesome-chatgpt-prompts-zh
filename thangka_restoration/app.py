@@ -790,16 +790,19 @@ def build_app():
                 if np.sum(binary > 0) == 0:
                     raise gr.Error("掩膜图中没有检测到白色区域，请确认已用白色涂抹了损坏区域。")
 
-                result = sd_inpaint(
-                    bgr, binary,
-                    prompt_type=prompt_type,
-                    custom_prompt=custom_prompt,
-                    strength=strength,
-                    guidance_scale=guidance,
-                    num_steps=int(steps),
-                    seed=int(seed),
-                    model_variant=variant,
-                )
+                try:
+                    result = sd_inpaint(
+                        bgr, binary,
+                        prompt_type=prompt_type,
+                        custom_prompt=custom_prompt,
+                        strength=strength,
+                        guidance_scale=guidance,
+                        num_steps=int(steps),
+                        seed=int(seed),
+                        model_variant=variant,
+                    )
+                except Exception as e:
+                    raise gr.Error(f"AI 修复失败: {e}")
                 return to_rgb(result)
 
             btn_sd.click(

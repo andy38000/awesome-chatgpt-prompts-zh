@@ -53,31 +53,27 @@ def _load_pipeline(model_variant: str = "recommended"):
     print(f"  设备: {_device}")
     print("=" * 50)
 
-    base_models = [
-        "stable-diffusion-v1-5/stable-diffusion-inpainting",
-        "runwayml/stable-diffusion-inpainting",
-        "stabilityai/stable-diffusion-2-inpainting",
-    ]
+    base_model = "stabilityai/stable-diffusion-2-inpainting"
 
-    _pipeline = None
-    for base_model in base_models:
-        try:
-            print(f"[1/2] 尝试加载: {base_model}")
-            _pipeline = StableDiffusionInpaintPipeline.from_pretrained(
-                base_model,
-                torch_dtype=dtype,
-                safety_checker=None,
-            )
-            print(f"  ✅ 基础模型加载成功: {base_model}")
-            break
-        except Exception as e:
-            print(f"  ❌ 失败: {e}")
-            continue
-
-    if _pipeline is None:
+    print(f"[1/2] 加载基础模型: {base_model}")
+    print(f"  镜像: {os.environ.get('HF_ENDPOINT', '未设置（使用官方源）')}")
+    print(f"  如果下载卡住，请确认网络可访问 huggingface.co 或 hf-mirror.com")
+    try:
+        _pipeline = StableDiffusionInpaintPipeline.from_pretrained(
+            base_model,
+            torch_dtype=dtype,
+            safety_checker=None,
+        )
+    except Exception as e:
         raise RuntimeError(
-            "所有模型都无法下载。请检查网络连接。\n"
-            "或手动下载模型: https://hf-mirror.com/runwayml/stable-diffusion-inpainting"
+            f"模型下载失败: {e}\n\n"
+            f"请尝试以下方法：\n"
+            f"1. 关闭代理/VPN 后重试\n"
+            f"2. 或在命令行中先运行：\n"
+            f"   set HF_ENDPOINT=https://hf-mirror.com\n"
+            f"   然后重新启动 python app.py\n"
+            f"3. 或手动下载模型：\n"
+            f"   huggingface-cli download stabilityai/stable-diffusion-2-inpainting --local-dir models/sd2.1"
         )
 
     lora_repo = "Wangchuk1376/ThangkaModels"
