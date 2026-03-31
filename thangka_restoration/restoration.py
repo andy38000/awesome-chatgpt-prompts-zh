@@ -1,0 +1,779 @@
+"""
+唐卡修复核心模块
+
+核心思路：老旧唐卡的主要退化不是"参数偏了"，而是：
+1. 表面积灰/氧化形成灰蒙层 → 用去雾算法去除
+2. 颜料氧化泛黄 → 色偏校正
+3. 色彩褪色 → 多层次自适应饱和度恢复
+4. 对比度下降 → 分区域自适应增强
+"""
+
+import cv2
+import numpy as np
+from PIL import Image, ImageEnhance
+
+
+def to_cv2(image: np.ndarray) -> np.ndarray:
+    if image.dtype != np.uint8:
+        image = np.clip(image, 0, 255).astype(np.uint8)
+    if len(image.shape) == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    elif image.shape[2] == 4:
+        image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+    return image
+
+
+def to_rgb(image: np.ndarray) -> np.ndarray:
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+
+def from_rgb(image: np.ndarray) -> np.ndarray:
+    return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+
+# ---------------------------------------------------------------------------
+# 0. 智能图像分析
+# ---------------------------------------------------------------------------
+
+def analyze_image(image: np.ndarray) -> dict:
+    """分析图像退化程度。"""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+
+    brightness = np.mean(gray)
+    contrast = np.std(gray.astype(np.float32))
+    avg_saturation = np.mean(hsv[:, :, 1])
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+    b_mean = np.mean(image[:, :, 0].astype(np.float32))
+    g_mean = np.mean(image[:, :, 1].astype(np.float32))
+    r_mean = np.mean(image[:, :, 2].astype(np.float32))
+    yellow_bias = (r_mean + g_mean) / 2 - b_mean
+
+    a_channel = lab[:, :, 1].astype(np.float32) - 128
+    b_channel = lab[:, :, 2].astype(np.float32) - 128
+    color_cast_a = np.mean(a_channel)
+    color_cast_b = np.mean(b_channel)
+
+    dark_channel = _get_dark_channel(image, 15)
+    haziness = np.mean(dark_channel)
+
+    return {
+        "brightness": float(brightness),
+        "contrast": float(contrast),
+        "saturation": float(avg_saturation),
+        "sharpness": float(laplacian_var),
+        "yellow_bias": float(yellow_bias),
+        "color_cast_a": float(color_cast_a),
+        "color_cast_b": float(color_cast_b),
+        "haziness": float(haziness),
+        "is_dark": brightness < 100,
+        "is_bright": brightness > 180,
+        "is_low_contrast": contrast < 45,
+        "is_faded": avg_saturation < 70,
+        "is_very_faded": avg_saturation < 40,
+        "is_blurry": laplacian_var < 200,
+        "is_noisy": laplacian_var > 3000,
+        "is_yellowed": yellow_bias > 15,
+        "is_hazy": haziness > 40,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 1. 去雾 / 去灰蒙 (Dark Channel Prior)
+# ---------------------------------------------------------------------------
+
+def _get_dark_channel(image: np.ndarray, patch_size: int = 15) -> np.ndarray:
+    """计算暗通道。"""
+    min_channel = np.min(image, axis=2)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (patch_size, patch_size))
+    dark = cv2.erode(min_channel, kernel)
+    return dark
+
+
+def _estimate_atmospheric_light(image: np.ndarray, dark_channel: np.ndarray) -> np.ndarray:
+    """估算大气光照值（灰蒙层的颜色）。"""
+    h, w = dark_channel.shape
+    num_pixels = h * w
+    top_count = max(int(num_pixels * 0.001), 1)
+
+    flat_dark = dark_channel.ravel()
+    indices = np.argsort(flat_dark)[-top_count:]
+
+    flat_image = image.reshape(-1, 3)
+    brightest = flat_image[indices]
+    atmospheric = np.mean(brightest, axis=0)
+    return atmospheric
+
+
+def dehaze(image: np.ndarray, strength: float = 0.3) -> np.ndarray:
+    """
+    安全去灰蒙：不使用形态学操作（erode会吃掉细节），
+    改用 LAB 空间亮度通道的局部-全局差异来提升透明度。
+    这个方法只增强，绝不会丢失任何像素细节。
+    """
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+    l = lab[:, :, 0]
+
+    local_mean = cv2.GaussianBlur(l, (0, 0), sigmaX=50)
+    global_mean = np.mean(l)
+
+    haze_map = local_mean - global_mean
+    haze_map = np.clip(haze_map, 0, None)
+
+    correction = haze_map * strength * 0.5
+    lab[:, :, 0] = np.clip(l - correction, 0, 255)
+
+    lab = np.clip(lab, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+# ---------------------------------------------------------------------------
+# 2. 色偏校正 / 去黄
+# ---------------------------------------------------------------------------
+
+def correct_color_cast(image: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    """
+    自动色偏校正。
+    分析LAB空间中的a/b通道偏移，将其拉回中性。
+    对老旧唐卡的泛黄特别有效。
+    """
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+    a_mean = np.mean(lab[:, :, 1]) - 128
+    b_mean = np.mean(lab[:, :, 2]) - 128
+
+    lab[:, :, 1] -= a_mean * strength
+    lab[:, :, 2] -= b_mean * strength
+
+    lab = np.clip(lab, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def reduce_yellowing(image: np.ndarray, strength: float = 0.3) -> np.ndarray:
+    """
+    温和去泛黄：只轻微校正，唐卡本身的暖色调是正常的，不应该去掉。
+    只处理b通道中超过阈值的部分，保留正常暖色。
+    """
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+    b_mean = np.mean(lab[:, :, 2]) - 128
+    if b_mean > 8:
+        correction = (b_mean - 8) * strength * 0.5
+        lab[:, :, 2] -= correction
+
+    lab = np.clip(lab, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+# ---------------------------------------------------------------------------
+# 3. 裂痕检测与修复
+# ---------------------------------------------------------------------------
+
+def detect_cracks(image: np.ndarray, sensitivity: int = 30) -> np.ndarray:
+    """针对唐卡优化的裂痕检测。"""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+
+    kernel_size = max(3, min(15, int(min(h, w) / 200)))
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+
+    kernel_line = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, kernel_line)
+    whitehat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, kernel_line)
+    combined = cv2.add(blackhat, whitehat)
+
+    thresh_val = max(5, 60 - sensitivity)
+    _, binary = cv2.threshold(combined, thresh_val, 255, cv2.THRESH_BINARY)
+
+    mask = np.zeros_like(binary)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+
+    total_pixels = h * w
+    max_area = total_pixels * 0.002
+    min_area = max(3, total_pixels * 0.000005)
+
+    for i in range(1, num_labels):
+        area = stats[i, cv2.CC_STAT_AREA]
+        comp_w = stats[i, cv2.CC_STAT_WIDTH]
+        comp_h = stats[i, cv2.CC_STAT_HEIGHT]
+        if area < min_area or area > max_area:
+            continue
+        aspect = max(comp_w, comp_h) / (min(comp_w, comp_h) + 1e-6)
+        compactness = area / (comp_w * comp_h + 1e-6)
+        if aspect < 2.0 and compactness > 0.5:
+            continue
+        mask[labels == i] = 255
+
+    dilate_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+    mask = cv2.dilate(mask, dilate_k, iterations=1)
+    return mask
+
+
+def inpaint_cracks(image: np.ndarray, mask: np.ndarray, radius: int = 3,
+                   method: str = "telea") -> np.ndarray:
+    if len(mask.shape) == 3:
+        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    _, binary_mask = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+    flag = cv2.INPAINT_TELEA if method == "telea" else cv2.INPAINT_NS
+    return cv2.inpaint(image, binary_mask, radius, flag)
+
+
+def auto_repair_cracks(image: np.ndarray, sensitivity: int = 30,
+                       radius: int = 3, method: str = "telea") -> np.ndarray:
+    mask = detect_cracks(image, sensitivity)
+    return inpaint_cracks(image, mask, radius, method)
+
+
+# ---------------------------------------------------------------------------
+# 4. 手动区域修复
+# ---------------------------------------------------------------------------
+
+def manual_inpaint(image: np.ndarray, mask: np.ndarray,
+                   radius: int = 5, method: str = "telea") -> np.ndarray:
+    return inpaint_cracks(image, mask, radius, method)
+
+
+# ---------------------------------------------------------------------------
+# 5. 颜色恢复与增强
+# ---------------------------------------------------------------------------
+
+def restore_colors(image: np.ndarray, saturation: float = 1.4,
+                   warmth: float = 1.0) -> np.ndarray:
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[:, :, 1] = np.clip(hsv[:, :, 1] * saturation, 0, 255)
+    if warmth != 1.0:
+        hsv[:, :, 0] = np.clip(hsv[:, :, 0] + (warmth - 1.0) * 5, 0, 179)
+    hsv = hsv.astype(np.uint8)
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+
+def adaptive_color_restore(image: np.ndarray, target_saturation: float = 100.0) -> np.ndarray:
+    """自适应颜色恢复：自动计算增强倍数。"""
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).astype(np.float32)
+    current_sat = np.mean(hsv[:, :, 1])
+    if current_sat < 5:
+        return image
+
+    ratio = target_saturation / current_sat
+    ratio = np.clip(ratio, 1.0, 3.0)
+
+    s = hsv[:, :, 1]
+    hsv[:, :, 1] = np.clip(s * ratio, 0, 255)
+    hsv = hsv.astype(np.uint8)
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+
+def auto_white_balance(image: np.ndarray) -> np.ndarray:
+    result = image.astype(np.float32)
+    avg_b = np.mean(result[:, :, 0])
+    avg_g = np.mean(result[:, :, 1])
+    avg_r = np.mean(result[:, :, 2])
+    avg_all = (avg_b + avg_g + avg_r) / 3.0
+    result[:, :, 0] *= avg_all / (avg_b + 1e-6)
+    result[:, :, 1] *= avg_all / (avg_g + 1e-6)
+    result[:, :, 2] *= avg_all / (avg_r + 1e-6)
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def enhance_gold(image: np.ndarray, intensity: float = 1.15) -> np.ndarray:
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lower_gold = np.array([12, 50, 60])
+    upper_gold = np.array([38, 255, 255])
+    gold_mask = cv2.inRange(hsv, lower_gold, upper_gold)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    gold_mask = cv2.morphologyEx(gold_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    hsv_float = hsv.astype(np.float32)
+    gold_region = gold_mask > 0
+    hsv_float[gold_region, 1] = np.clip(hsv_float[gold_region, 1] * intensity, 0, 255)
+    hsv_float[gold_region, 2] = np.clip(hsv_float[gold_region, 2] * min(intensity, 1.2), 0, 255)
+    return cv2.cvtColor(hsv_float.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+
+def enhance_red_blue(image: np.ndarray, intensity: float = 1.3) -> np.ndarray:
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    hsv_float = hsv.astype(np.float32)
+
+    red_mask = cv2.inRange(hsv, np.array([0, 50, 50]), np.array([10, 255, 255])) | \
+               cv2.inRange(hsv, np.array([160, 50, 50]), np.array([179, 255, 255]))
+    blue_mask = cv2.inRange(hsv, np.array([90, 50, 50]), np.array([130, 255, 255]))
+
+    region = (red_mask | blue_mask) > 0
+    hsv_float[region, 1] = np.clip(hsv_float[region, 1] * intensity, 0, 255)
+    return cv2.cvtColor(hsv_float.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+
+# ---------------------------------------------------------------------------
+# 6. 去噪与平滑
+# ---------------------------------------------------------------------------
+
+def denoise(image: np.ndarray, strength: int = 7) -> np.ndarray:
+    return cv2.fastNlMeansDenoisingColored(image, None, strength, strength, 7, 21)
+
+
+def bilateral_smooth(image: np.ndarray, d: int = 9,
+                     sigma_color: float = 50,
+                     sigma_space: float = 50) -> np.ndarray:
+    return cv2.bilateralFilter(image, d, sigma_color, sigma_space)
+
+
+# ---------------------------------------------------------------------------
+# 7. 对比度与亮度
+# ---------------------------------------------------------------------------
+
+def adjust_contrast_brightness(image: np.ndarray, contrast: float = 1.0,
+                               brightness: int = 0) -> np.ndarray:
+    result = image.astype(np.float32) * contrast + brightness
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def auto_contrast(image: np.ndarray, clip_percent: float = 1.0) -> np.ndarray:
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    l_channel = lab[:, :, 0]
+    hist = cv2.calcHist([l_channel], [0], None, [256], [0, 256]).flatten()
+    total = l_channel.size
+    clip_count = total * clip_percent / 100.0
+    cumsum = np.cumsum(hist)
+    low = np.searchsorted(cumsum, clip_count)
+    high = np.searchsorted(cumsum, total - clip_count)
+    if high <= low:
+        return image
+    scale = 255.0 / (high - low)
+    l_channel = np.clip((l_channel.astype(np.float32) - low) * scale, 0, 255).astype(np.uint8)
+    lab[:, :, 0] = l_channel
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def adaptive_histogram_eq(image: np.ndarray, clip_limit: float = 2.0,
+                          tile_size: int = 8) -> np.ndarray:
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(tile_size, tile_size))
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def auto_brightness(image: np.ndarray, target: float = 125.0) -> np.ndarray:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    current = np.mean(gray)
+    if current < 1:
+        return image
+    gamma = np.log(target / 255.0) / np.log(current / 255.0 + 1e-6)
+    gamma = np.clip(gamma, 0.3, 3.0)
+    table = np.array([((i / 255.0) ** gamma) * 255 for i in range(256)]).astype(np.uint8)
+    return cv2.LUT(image, table)
+
+
+# ---------------------------------------------------------------------------
+# 8. 边缘增强与锐化
+# ---------------------------------------------------------------------------
+
+def sharpen(image: np.ndarray, amount: float = 0.5) -> np.ndarray:
+    blurred = cv2.GaussianBlur(image, (0, 0), 3)
+    result = cv2.addWeighted(image, 1.0 + amount, blurred, -amount, 0)
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def detail_enhance(image: np.ndarray, sigma_s: float = 10,
+                   sigma_r: float = 0.15) -> np.ndarray:
+    return cv2.detailEnhance(image, sigma_s=sigma_s, sigma_r=sigma_r)
+
+
+# ---------------------------------------------------------------------------
+# 8.5 超级清晰度 (Super Clarity)
+# ---------------------------------------------------------------------------
+
+def _multi_scale_unsharp(image: np.ndarray,
+                         scales: list = None,
+                         weights: list = None) -> np.ndarray:
+    """
+    多尺度非锐化掩膜：在不同模糊半径上分别提取细节并叠加。
+    小尺度恢复纹理（笔触纤维），大尺度恢复结构（线条轮廓）。
+    """
+    if scales is None:
+        scales = [1, 3, 7]
+    if weights is None:
+        weights = [0.5, 0.3, 0.2]
+
+    img_f = image.astype(np.float64)
+    detail_sum = np.zeros_like(img_f)
+
+    for sigma, w in zip(scales, weights):
+        blurred = cv2.GaussianBlur(img_f, (0, 0), sigma)
+        detail = img_f - blurred
+        detail_sum += detail * w
+
+    return detail_sum
+
+
+def _high_frequency_boost(image: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    """
+    高频提升滤波：用拉普拉斯算子提取高频分量（边缘/纹理），
+    然后将其按比例加回原图。
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    lap = cv2.Laplacian(gray, cv2.CV_64F, ksize=3)
+
+    lap_3ch = cv2.merge([lap, lap, lap])
+    result = image.astype(np.float64) + lap_3ch * strength
+    return np.clip(result, 0, 255).astype(np.uint8)
+
+
+def _guided_filter(image: np.ndarray, radius: int = 8,
+                   eps: float = 0.01) -> np.ndarray:
+    """
+    引导滤波：在平滑噪声的同时精确保留边缘。
+    用作清晰度增强前的预处理，去除噪声但保留结构。
+    """
+    img_f = image.astype(np.float64) / 255.0
+    result = np.zeros_like(img_f)
+
+    for c in range(3):
+        I = img_f[:, :, c]
+        mean_I = cv2.boxFilter(I, -1, (radius, radius))
+        mean_II = cv2.boxFilter(I * I, -1, (radius, radius))
+        var_I = mean_II - mean_I * mean_I
+
+        a = var_I / (var_I + eps)
+        b = mean_I - a * mean_I
+
+        mean_a = cv2.boxFilter(a, -1, (radius, radius))
+        mean_b = cv2.boxFilter(b, -1, (radius, radius))
+
+        result[:, :, c] = mean_a * I + mean_b
+
+    return np.clip(result * 255, 0, 255).astype(np.uint8)
+
+
+def _local_contrast_enhance(image: np.ndarray, grid_size: int = 16,
+                            clip_limit: float = 3.0) -> np.ndarray:
+    """
+    局部对比度增强：对 L 通道做精细 CLAHE，使暗区细节也能显现。
+    """
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit,
+                            tileGridSize=(grid_size, grid_size))
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def super_clarity(image: np.ndarray,
+                  strength: float = 1.0,
+                  denoise_first: bool = True,
+                  detail_boost: float = 1.0,
+                  edge_boost: float = 0.8,
+                  local_contrast: float = 2.5,
+                  micro_texture: float = 0.6) -> np.ndarray:
+    """
+    超级清晰度：融合多种技术让画面变得极其清晰锐利。
+
+    处理流程：
+    1. 引导滤波去噪（保留边缘的同时去除噪声，防止锐化放大噪点）
+    2. 多尺度非锐化掩膜（分别恢复微观纹理、中频细节和宏观结构）
+    3. 高频提升滤波（用拉普拉斯算子增强边缘）
+    4. 局部对比度增强（让暗区细节也清晰可见）
+    5. 微纹理增强（恢复唐卡绘画的笔触和颜料纹理）
+
+    strength: 总体强度 0.1-2.0，1.0为标准
+    """
+    s = np.clip(strength, 0.1, 2.0)
+    result = image.copy()
+
+    if denoise_first:
+        result = _guided_filter(result, radius=4, eps=0.005)
+
+    details = _multi_scale_unsharp(
+        result,
+        scales=[1, 3, 7, 15],
+        weights=[0.4 * s, 0.3 * s, 0.2 * s, 0.1 * s],
+    )
+    result = np.clip(result.astype(np.float64) + details * detail_boost, 0, 255).astype(np.uint8)
+
+    result = _high_frequency_boost(result, strength=edge_boost * s * 0.3)
+
+    result = _local_contrast_enhance(
+        result,
+        grid_size=16,
+        clip_limit=local_contrast * s,
+    )
+
+    if micro_texture > 0:
+        micro = _multi_scale_unsharp(
+            result,
+            scales=[0.5, 1.0],
+            weights=[0.6 * s, 0.4 * s],
+        )
+        result = np.clip(
+            result.astype(np.float64) + micro * micro_texture,
+            0, 255,
+        ).astype(np.uint8)
+
+    return result
+
+
+def super_clarity_preset(image: np.ndarray, level: str = "标准") -> np.ndarray:
+    """
+    清晰度预设模式。
+    - 轻微：细微提升，最自然
+    - 标准：明显提升，适合大多数唐卡
+    - 强力：大幅提升，适合非常模糊的图
+    - 极限：最大清晰度，适合严重模糊
+    """
+    presets = {
+        "轻微": dict(strength=0.5, detail_boost=0.7, edge_boost=0.5, local_contrast=1.5, micro_texture=0.3),
+        "标准": dict(strength=1.0, detail_boost=1.0, edge_boost=0.8, local_contrast=2.5, micro_texture=0.6),
+        "强力": dict(strength=1.5, detail_boost=1.3, edge_boost=1.2, local_contrast=3.0, micro_texture=0.8),
+        "极限": dict(strength=2.0, detail_boost=1.5, edge_boost=1.5, local_contrast=3.5, micro_texture=1.0),
+    }
+    params = presets.get(level, presets["标准"])
+    return super_clarity(image, **params)
+
+
+# ---------------------------------------------------------------------------
+# 9. 去污渍
+# ---------------------------------------------------------------------------
+
+def remove_stains(image: np.ndarray, lower_thresh: tuple = (0, 0, 0),
+                  upper_thresh: tuple = (30, 30, 30),
+                  radius: int = 5) -> np.ndarray:
+    lower = np.array(lower_thresh)
+    upper = np.array(upper_thresh)
+    mask = cv2.inRange(image, lower, upper)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    return cv2.inpaint(image, mask, radius, cv2.INPAINT_TELEA)
+
+
+def remove_yellow_stains(image: np.ndarray, radius: int = 5) -> np.ndarray:
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lower_yellow = np.array([18, 60, 150])
+    upper_yellow = np.array([30, 200, 255])
+    mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
+    return cv2.inpaint(image, mask, radius, cv2.INPAINT_TELEA)
+
+
+# ---------------------------------------------------------------------------
+# 10. 纹理合成修复 (AI级别修复)
+# ---------------------------------------------------------------------------
+
+def multi_scale_inpaint(image: np.ndarray, mask: np.ndarray,
+                        max_radius: int = 10) -> np.ndarray:
+    """
+    多尺度迭代修复：从边缘逐步向中心修复，每次只修一小层。
+    比单次大半径修复效果好很多，能更好地延续周围的纹理和线条。
+
+    原理：
+    1. 将掩膜从外向内分成多层（洋葱皮式）
+    2. 每层用小半径 NS 修复（只修边缘一圈）
+    3. 每修完一层，下一层就有了更好的参考信息
+    """
+    if len(mask.shape) == 3:
+        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
+
+    if np.sum(binary > 0) == 0:
+        return image
+
+    result = image.copy()
+    remaining = binary.copy()
+
+    for r in range(2, max_radius + 1, 2):
+        if np.sum(remaining > 0) == 0:
+            break
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (r * 2, r * 2))
+        eroded = cv2.erode(remaining, kernel, iterations=1)
+        layer = remaining - eroded
+
+        if np.sum(layer > 0) == 0:
+            layer = remaining
+
+        result = cv2.inpaint(result, layer, 3, cv2.INPAINT_NS)
+        remaining = eroded
+
+    if np.sum(remaining > 0) > 0:
+        result = cv2.inpaint(result, remaining, 5, cv2.INPAINT_NS)
+
+    return result
+
+
+def advanced_damage_repair(image: np.ndarray, mask: np.ndarray,
+                           method: str = "multi_scale") -> np.ndarray:
+    """
+    高级损伤修复。
+
+    method:
+    - "multi_scale": 多尺度迭代修复（推荐，效果最好）
+    - "ns": Navier-Stokes inpaint
+    - "telea": Fast Marching Method
+    """
+    if method in ("multi_scale", "texture", "combined"):
+        return multi_scale_inpaint(image, mask, max_radius=10)
+    elif method == "ns":
+        return inpaint_cracks(image, mask, radius=7, method="ns")
+    else:
+        return inpaint_cracks(image, mask, radius=7, method="telea")
+
+
+# ---------------------------------------------------------------------------
+# 11. 综合修复流水线
+# ---------------------------------------------------------------------------
+
+def full_restoration_pipeline(
+    image: np.ndarray,
+    do_crack_repair: bool = False,
+    crack_sensitivity: int = 30,
+    crack_radius: int = 3,
+    do_stain_removal: bool = False,
+    do_dehaze: bool = True,
+    dehaze_strength: float = 0.35,
+    do_deyellow: bool = False,
+    deyellow_strength: float = 0.3,
+    do_denoise: bool = True,
+    denoise_strength: int = 5,
+    do_color_restore: bool = True,
+    saturation: float = 1.2,
+    warmth: float = 1.0,
+    do_gold_enhance: bool = True,
+    gold_intensity: float = 1.15,
+    do_auto_contrast: bool = True,
+    do_sharpen: bool = True,
+    sharpen_amount: float = 0.5,
+    do_white_balance: bool = False,
+) -> np.ndarray:
+    """
+    一键综合修复流水线。
+    新增去雾和去黄作为前置步骤，效果显著提升。
+    """
+    result = image.copy()
+
+    if do_crack_repair:
+        result = auto_repair_cracks(result, crack_sensitivity, crack_radius)
+
+    if do_stain_removal:
+        result = remove_stains(result)
+
+    if do_dehaze:
+        result = dehaze(result, dehaze_strength)
+
+    if do_deyellow:
+        result = reduce_yellowing(result, deyellow_strength)
+
+    if do_denoise:
+        result = denoise(result, denoise_strength)
+
+    if do_white_balance:
+        result = auto_white_balance(result)
+
+    if do_color_restore:
+        result = restore_colors(result, saturation, warmth)
+
+    if do_gold_enhance:
+        result = enhance_gold(result, gold_intensity)
+
+    if do_auto_contrast:
+        result = auto_contrast(result)
+
+    if do_sharpen:
+        result = sharpen(result, sharpen_amount)
+
+    return result
+
+
+def reveal_faded_details(image: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    """
+    让褪色的图案重新显现。
+
+    三层增强：
+    1. 超小窗口 CLAHE (4x4) — 放大每个小区域内的微小对比差异
+    2. 中等窗口 CLAHE (8x8) — 放大中等尺度的图案轮廓
+    3. LAB a/b 通道色差放大 — 让残存的色彩痕迹变得可见
+    """
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+
+    clip_fine = 2.0 + strength * 1.5
+    clahe_fine = cv2.createCLAHE(clipLimit=clip_fine, tileGridSize=(4, 4))
+    lab[:, :, 0] = clahe_fine.apply(lab[:, :, 0])
+
+    clip_mid = 1.5 + strength * 0.8
+    clahe_mid = cv2.createCLAHE(clipLimit=clip_mid, tileGridSize=(8, 8))
+    lab[:, :, 0] = clahe_mid.apply(lab[:, :, 0])
+
+    a = lab[:, :, 1].astype(np.float32)
+    b = lab[:, :, 2].astype(np.float32)
+    a_mid, b_mid = 128.0, 128.0
+    color_boost = 1.0 + strength * 0.25
+    lab[:, :, 1] = np.clip((a - a_mid) * color_boost + a_mid, 0, 255).astype(np.uint8)
+    lab[:, :, 2] = np.clip((b - b_mid) * color_boost + b_mid, 0, 255).astype(np.uint8)
+
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def detect_worn_areas(image: np.ndarray, threshold: float = 0.4) -> np.ndarray:
+    """
+    自动检测磨损/风化严重的区域。
+    原理：磨损区域的局部方差（纹理丰富度）远低于完好区域。
+    返回二值掩膜，白色=磨损严重的区域。
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    local_mean = cv2.blur(gray, (15, 15))
+    local_sq_mean = cv2.blur(gray * gray, (15, 15))
+    local_var = local_sq_mean - local_mean * local_mean
+    local_var = np.clip(local_var, 0, None)
+
+    global_var = np.mean(local_var)
+    if global_var < 1:
+        return np.zeros_like(gray, dtype=np.uint8)
+
+    worn = (local_var < global_var * threshold).astype(np.uint8) * 255
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    worn = cv2.morphologyEx(worn, cv2.MORPH_OPEN, kernel, iterations=2)
+    worn = cv2.morphologyEx(worn, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    return worn
+
+
+def smart_restoration(image: np.ndarray) -> np.ndarray:
+    """
+    智能修复模式 V6：
+
+    两阶段策略：
+    阶段1：极限增强 — 挤出所有残留细节
+    阶段2：磨损区域自动检测+修补 — 用论文算法填补已消失的内容
+    """
+    info = analyze_image(image)
+    result = image.copy()
+
+    if info["is_dark"]:
+        result = auto_brightness(result, target=125.0)
+
+    result = reveal_faded_details(result, strength=2.0)
+
+    if info["is_very_faded"]:
+        result = restore_colors(result, saturation=1.6, warmth=1.0)
+    elif info["is_faded"]:
+        result = restore_colors(result, saturation=1.4, warmth=1.0)
+    else:
+        result = restore_colors(result, saturation=1.2, warmth=1.0)
+
+    result = auto_contrast(result, clip_percent=1.0)
+
+    worn_mask = detect_worn_areas(result, threshold=0.3)
+    worn_pixels = np.sum(worn_mask > 0)
+    total_pixels = worn_mask.shape[0] * worn_mask.shape[1]
+
+    if worn_pixels > total_pixels * 0.01 and worn_pixels < total_pixels * 0.5:
+        try:
+            from paper_algorithms import edge_guided_inpaint
+            result = edge_guided_inpaint(result, worn_mask, iterations=3)
+        except Exception:
+            result = cv2.inpaint(result, worn_mask, 5, cv2.INPAINT_NS)
+
+    result = sharpen(result, amount=0.6)
+
+    return result
