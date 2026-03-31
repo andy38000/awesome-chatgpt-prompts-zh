@@ -31,6 +31,7 @@ from restoration import (
     from_rgb, to_rgb, to_cv2,
     analyze_image, smart_restoration,
     dehaze, reduce_yellowing, correct_color_cast, reveal_faded_details,
+    texture_inpaint, advanced_damage_repair,
     detect_cracks, inpaint_cracks, auto_repair_cracks, manual_inpaint,
     restore_colors, adaptive_color_restore, auto_white_balance,
     enhance_gold, enhance_red_blue,
@@ -172,7 +173,7 @@ def crack_repair_fn(image, sensitivity, radius, method):
 
 
 def manual_inpaint_fn(image, mask_image, radius, method):
-    """用户分别上传原图和掩膜图（在任意画图软件中用白色/红色标记损坏区域）。"""
+    """用户分别上传原图和掩膜图。"""
     if image is None or mask_image is None:
         return None
 
@@ -188,7 +189,12 @@ def manual_inpaint_fn(image, mask_image, radius, method):
 
     _, binary_mask = cv2.threshold(gray_mask, 30, 255, cv2.THRESH_BINARY)
 
-    result = manual_inpaint(bgr, binary_mask, int(radius), method)
+    if method == "texture":
+        result = advanced_damage_repair(bgr, binary_mask, method="texture")
+    elif method == "combined":
+        result = advanced_damage_repair(bgr, binary_mask, method="combined")
+    else:
+        result = manual_inpaint(bgr, binary_mask, int(radius), method)
     return to_rgb(result)
 
 
@@ -234,7 +240,12 @@ def auto_damage_repair_fn(image, threshold, radius, method):
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
     mask = cv2.dilate(mask, kernel, iterations=1)
 
-    result = manual_inpaint(bgr, mask, int(radius), method)
+    if method == "texture":
+        result = advanced_damage_repair(bgr, mask, method="texture")
+    elif method == "combined":
+        result = advanced_damage_repair(bgr, mask, method="combined")
+    else:
+        result = manual_inpaint(bgr, mask, int(radius), method)
     return to_rgb(result)
 
 
@@ -456,7 +467,11 @@ def build_app():
                         sl_dmg_thresh = gr.Slider(5, 60, value=20, step=5,
                                                   label="检测阈值（越低检测越多）")
                         sl_dmg_rad = gr.Slider(1, 20, value=8, step=1, label="修复半径")
-                        dd_dmg_m = gr.Dropdown(["telea", "ns"], value="ns", label="修复算法")
+                        dd_dmg_m = gr.Dropdown(
+                            ["texture", "combined", "ns", "telea"],
+                            value="texture",
+                            label="修复算法（texture=纹理合成最佳，combined=组合，ns/telea=传统）",
+                        )
                         with gr.Row():
                             btn_dmg_detect = gr.Button("检测损伤（预览）")
                             btn_dmg_repair = gr.Button("检测并修复", variant="primary")
@@ -483,7 +498,11 @@ def build_app():
                         img_manual_orig = gr.Image(label="上传原图", type="numpy")
                         img_manual_mask = gr.Image(label="上传标记图（白色=需要修复的区域）", type="numpy")
                         sl_manual_r = gr.Slider(1, 20, value=8, step=1, label="修复半径")
-                        dd_manual_m = gr.Dropdown(["telea", "ns"], value="ns", label="修复算法")
+                        dd_manual_m = gr.Dropdown(
+                            ["texture", "combined", "ns", "telea"],
+                            value="texture",
+                            label="修复算法（texture=纹理合成最佳）",
+                        )
                         btn_manual = gr.Button("修复标记区域", variant="primary")
                     with gr.Column():
                         out_manual = gr.Image(label="修复结果", type="numpy")
