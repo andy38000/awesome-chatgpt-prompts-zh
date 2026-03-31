@@ -653,10 +653,127 @@ def build_app():
                             [out_stain])
             btn_yellow.click(remove_yellow_fn, [img_stain, sl_yellow_r], [out_stain])
 
+        # ==== Tab: AI 生成式修复 ====
+        with gr.Tab("🤖 AI 修复（Stable Diffusion）"):
+            gr.Markdown(
+                "**AI 生成式修复** — 使用 Stable Diffusion 理解唐卡绘画风格，"
+                "智能生成并填充颜料脱落/损伤区域的内容。\n\n"
+                "**⚠️ 需要额外安装：** `pip install diffusers transformers accelerate torch`\n\n"
+                "**推荐配置：** NVIDIA GPU (6GB+ 显存) | CPU 也能用但很慢（5-15分钟/张）"
+            )
+
+            btn_check_sd = gr.Button("检查 AI 修复环境")
+            out_sd_status = gr.Markdown("")
+
+            def check_sd_env():
+                try:
+                    from sd_inpaint import check_sd_available
+                    info = check_sd_available()
+                    return info["message"]
+                except Exception as e:
+                    return f"❌ 环境检查失败: {e}\n\n请运行: `pip install diffusers transformers accelerate torch`"
+
+            btn_check_sd.click(check_sd_env, [], [out_sd_status])
+
+            with gr.Row():
+                with gr.Column():
+                    img_sd = gr.Image(label="上传唐卡原图", type="numpy")
+                    img_sd_mask = gr.Image(
+                        label="上传掩膜图（白色=需要AI重绘的区域）",
+                        type="numpy",
+                    )
+                    dd_sd_prompt = gr.Dropdown(
+                        ["通用修复", "花卉卷草", "佛像面部", "背景天空",
+                         "金色装饰", "莲花", "衣物纹饰"],
+                        value="通用修复",
+                        label="修复类型（选择最接近损伤区域的内容）",
+                    )
+                    txt_sd_custom = gr.Textbox(
+                        label="自定义 Prompt（留空则使用预设）",
+                        placeholder="例如: detailed lotus flower with green leaves, thangka painting style",
+                        lines=2,
+                    )
+                    with gr.Row():
+                        sl_sd_strength = gr.Slider(
+                            0.5, 1.0, value=0.85, step=0.05,
+                            label="重绘强度（越大生成内容越多）",
+                        )
+                        sl_sd_guidance = gr.Slider(
+                            5.0, 20.0, value=12.0, step=0.5,
+                            label="风格引导（越大越严格遵循描述）",
+                        )
+                    sl_sd_steps = gr.Slider(
+                        10, 50, value=30, step=5,
+                        label="推理步数（越多质量越高，越慢）",
+                    )
+                    sl_sd_seed = gr.Slider(
+                        -1, 9999, value=-1, step=1,
+                        label="随机种子（-1=随机，固定值可复现结果）",
+                    )
+                    btn_sd = gr.Button("开始 AI 修复", variant="primary", size="lg")
+                with gr.Column():
+                    out_sd = gr.Image(label="AI 修复结果", type="numpy")
+
+            def sd_repair_fn(image, mask_image, prompt_type, custom_prompt,
+                             strength, guidance, steps, seed):
+                if image is None or mask_image is None:
+                    return None
+                try:
+                    from sd_inpaint import sd_inpaint
+                    from restoration import from_rgb, to_rgb, resize_if_needed
+                except ImportError:
+                    return None
+
+                bgr = from_rgb(image)
+
+                mask_resized = cv2.resize(mask_image, (bgr.shape[1], bgr.shape[0]))
+                if len(mask_resized.shape) == 3:
+                    mask_gray = cv2.cvtColor(mask_resized, cv2.COLOR_RGB2GRAY)
+                else:
+                    mask_gray = mask_resized
+                _, binary = cv2.threshold(mask_gray, 30, 255, cv2.THRESH_BINARY)
+
+                result = sd_inpaint(
+                    bgr, binary,
+                    prompt_type=prompt_type,
+                    custom_prompt=custom_prompt,
+                    strength=strength,
+                    guidance_scale=guidance,
+                    num_steps=int(steps),
+                    seed=int(seed),
+                )
+                return to_rgb(result)
+
+            btn_sd.click(
+                sd_repair_fn,
+                inputs=[img_sd, img_sd_mask, dd_sd_prompt, txt_sd_custom,
+                        sl_sd_strength, sl_sd_guidance, sl_sd_steps, sl_sd_seed],
+                outputs=out_sd,
+            )
+
+            gr.Markdown(
+                """
+                ---
+                **使用步骤：**
+                1. 用画图软件在唐卡图片上用**白色**涂抹损伤区域，保存为掩膜图
+                2. 分别上传原图和掩膜图
+                3. 选择**修复类型**（选最接近损伤区域内容的选项）
+                4. 点击「开始 AI 修复」
+                5. 如果效果不满意，调整参数或换个随机种子重试
+
+                **参数建议：**
+                | 场景 | 重绘强度 | 风格引导 | 步数 |
+                |------|---------|---------|------|
+                | 小面积颜料脱落 | 0.75-0.85 | 10-12 | 25-30 |
+                | 大面积损伤 | 0.85-0.95 | 12-15 | 30-40 |
+                | 精细花纹区域 | 0.80-0.90 | 12-15 | 35-50 |
+                """
+            )
+
         gr.Markdown(
             """
             ---
-            **唐卡修复工具** | 基于 OpenCV 图像处理技术 | 适用于唐卡等传统绘画的数字化保护与修复
+            **唐卡修复工具** | OpenCV + Stable Diffusion | 适用于唐卡等传统绘画的数字化保护与修复
             """
         )
 
