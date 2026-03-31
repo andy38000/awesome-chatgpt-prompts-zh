@@ -1,186 +1,306 @@
 # Claude Code - Reconstructed
 
-A functional reconstruction of the Claude Code CLI, based on architecture analysis of `@anthropic-ai/claude-code` v2.1.88.
+A fully functional reconstruction of the Claude Code CLI, based on architecture analysis of `@anthropic-ai/claude-code` v2.1.88.
 
-This project recreates the core architecture of the original tool — **React/Ink terminal UI**, **command system**, **tool execution framework**, and **Anthropic API integration with tool_use loop** — as a fully working, compilable, and runnable TypeScript application.
+Recreates the core architecture — **React/Ink terminal UI**, **QueryEngine agentic loop**, **8 tools**, **8 slash commands** — as a compilable and runnable TypeScript application.
 
-## Architecture Overview
+---
 
-The original Claude Code is built with a fascinating stack:
+## 下载到本地 + 安装 + 使用（完整步骤）
 
-- **React + Ink** for terminal UI rendering (yes, React components in the terminal)
-- **QueryEngine** as the core conversation loop: send user message → stream AI response → execute tool calls → feed results back → repeat
-- **Tool system** with `BashTool`, `FileReadTool`, `FileEditTool`, `GlobTool`, `GrepTool`, etc.
-- **Command system** for slash commands (`/help`, `/model`, `/cost`, `/compact`, `/config`)
-- **Cost tracking** with per-model token pricing
+### 第零步：前置条件
+
+| 依赖 | 最低版本 | 检查命令 |
+|------|---------|---------|
+| Node.js | >= 18 | `node -v` |
+| npm | >= 8 | `npm -v` |
+| Git | 任意 | `git --version` |
+| Anthropic API Key | — | 从 https://console.anthropic.com/settings/keys 获取 |
+
+> **没有 Node.js？** 安装最简单的方式：
+> - macOS: `brew install node`
+> - Ubuntu/Debian: `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt install -y nodejs`
+> - Windows: 下载 https://nodejs.org/
+
+---
+
+### 第一步：克隆仓库
+
+```bash
+git clone https://github.com/andy38000/awesome-chatgpt-prompts-zh.git claude-code
+cd claude-code
+git checkout cursor/claude-code-src-3019
+```
+
+---
+
+### 第二步：安装依赖 + 自动构建
+
+```bash
+npm install
+```
+
+> `npm install` 会自动触发 `postinstall` 脚本编译 TypeScript → `dist/`。
+> 如果你看到 `tsc` 编译输出并且没有报错，说明构建成功。
+
+手动构建（可选）：
+
+```bash
+npm run build
+```
+
+---
+
+### 第三步：设置 API Key
+
+**Linux / macOS：**
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-api03-你的密钥"
+```
+
+写入 shell 配置以持久化：
+
+```bash
+echo 'export ANTHROPIC_API_KEY="sk-ant-api03-你的密钥"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+> zsh 用户请将 `~/.bashrc` 替换为 `~/.zshrc`
+
+**Windows (PowerShell)：**
+
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-api03-你的密钥"
+```
+
+永久设置：
+
+```powershell
+[Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", "sk-ant-api03-你的密钥", "User")
+```
+
+---
+
+### 第四步：运行
+
+有三种运行方式：
+
+#### 方式 A：开发模式（推荐，免编译热运行）
+
+```bash
+npm run dev
+```
+
+等同于：
+
+```bash
+npx tsx src/entrypoints/cli.tsx
+```
+
+#### 方式 B：编译后运行
+
+```bash
+npm run build
+npm start
+```
+
+等同于：
+
+```bash
+node dist/entrypoints/cli.js
+```
+
+#### 方式 C：全局安装（系统任意位置使用 `claude` 命令）
+
+```bash
+npm link
+```
+
+然后在任何目录：
+
+```bash
+claude
+```
+
+---
+
+### 第五步：使用
+
+#### 交互模式（默认）
+
+直接运行，进入 React/Ink 终端 UI：
+
+```bash
+npm run dev
+```
+
+你会看到：
+
+```
+  ╔═══════════════════════════════════════╗
+  ║         Claude Code v2.1.88           ║
+  ╚═══════════════════════════════════════╝
+  Model: Sonnet • Type /help for commands • Ctrl+C to cancel
+
+❯ _
+```
+
+直接输入自然语言，Claude 会自动调用工具（读文件、执行命令、编辑代码等）来完成任务。
+
+#### 一次性提问模式（非交互）
+
+```bash
+# 直接提问，输出后退出
+npx tsx src/entrypoints/cli.tsx -p "用Python写一个快速排序"
+
+# 指定模型
+npx tsx src/entrypoints/cli.tsx -m opus -p "分析当前目录的代码结构"
+
+# 详细模式（显示工具调用详情）
+npx tsx src/entrypoints/cli.tsx --verbose -p "帮我修复 bug"
+```
+
+#### 交互模式下的斜杠命令
+
+| 命令 | 功能 |
+|------|------|
+| `/help` | 显示所有可用命令和工具 |
+| `/model` | 查看当前模型 / 切换模型（sonnet / opus / haiku） |
+| `/model opus` | 切换到 Opus 模型 |
+| `/model haiku` | 切换到 Haiku 模型 |
+| `/cost` | 查看本次会话的 token 用量和花费 |
+| `/compact` | 压缩对话历史以减少上下文占用 |
+| `/config` | 查看/修改配置 |
+| `/config thinking on` | 开启扩展思考 |
+| `/config thinking off` | 关闭扩展思考 |
+| `/clear` | 清空对话历史 |
+| `/version` | 显示版本号 |
+| `/exit` | 退出 |
+
+#### CLI 参数
+
+```
+Usage: claude [options]
+
+Options:
+  -v, --version                   显示版本号
+  -m, --model <model>             选择模型 (默认: claude-sonnet-4-20250514)
+  -p, --prompt <text>             一次性提问（非交互模式）
+  --cwd <dir>                     工作目录 (默认: 当前目录)
+  --print                         打印模式
+  --dangerously-skip-permissions  自动批准所有工具调用（危险！）
+  --verbose                       详细输出
+  -h, --help                      显示帮助
+```
+
+---
+
+## 内置工具
+
+Claude 会根据你的请求自动选择和调用以下工具：
+
+| 工具 | 功能 | 示例用途 |
+|------|------|---------|
+| **BashTool** | 执行 Shell 命令 | 运行测试、安装包、git 操作 |
+| **FileReadTool** | 读取文件内容（带行号） | 查看源码、配置文件 |
+| **FileWriteTool** | 创建/写入文件 | 生成新文件 |
+| **FileEditTool** | 精确字符串替换编辑 | 修改代码、修 bug |
+| **GlobTool** | 按模式搜索文件名 | 查找 `*.tsx` 文件 |
+| **GrepTool** | 按正则搜索文件内容 | 查找函数定义、引用 |
+| **WebFetchTool** | 抓取 URL 内容 | 查阅文档、下载参考 |
+| **TodoWriteTool** | 管理任务列表 | 规划复杂任务 |
+
+---
+
+## 架构说明
+
+### QueryEngine 核心循环
+
+```
+用户输入
+    ↓
+构建 System Prompt（工具列表 + Git 上下文）
+    ↓
+发送到 Anthropic API（流式）
+    ↓
+┌─→ 接收响应
+│       ↓
+│   包含 tool_use？
+│       │
+│     是 → 依次执行每个工具 (BashTool, FileReadTool, …)
+│       │       ↓
+│       │   收集工具执行结果
+│       │       ↓
+│       └── 将结果发回 API（继续循环）───┐
+│                                       │
+│   否 → 返回最终文本回复              │
+│       ↓                               │
+│   更新 token 计数和费用              │
+│       ↓                               │
+    显示给用户
+```
+
+### 项目结构
 
 ```
 src/
 ├── entrypoints/
-│   ├── cli.tsx              # CLI entry point (commander.js + Ink render)
-│   └── nonInteractive.ts    # One-shot prompt mode (--prompt / --print)
-├── components/
-│   ├── App.tsx              # Root React component
-│   ├── Logo.tsx             # Startup banner
-│   ├── MessageView.tsx      # Message rendering (user/assistant/system)
-│   ├── StatusLine.tsx       # Bottom status bar (model, tokens, cost)
-│   ├── Spinner.tsx          # Animated loading spinner
-│   └── ToolProgress.tsx     # Tool execution progress indicator
-├── screens/
-│   └── InteractiveScreen.tsx # Main REPL screen (input + messages + tools)
-├── commands/
-│   ├── index.ts             # Command registry and dispatch
-│   ├── help.ts              # /help command
-│   ├── clear.ts             # /clear command
-│   ├── cost.ts              # /cost command
-│   ├── model.ts             # /model command
-│   ├── compact.ts           # /compact command
-│   ├── config.ts            # /config command
-│   ├── version.ts           # /version command
-│   └── exit.ts              # /exit command
-├── tools/
-│   ├── index.ts             # Tool registry
-│   ├── BashTool/            # Shell command execution
-│   ├── FileReadTool/        # Read files with line numbers
-│   ├── FileWriteTool/       # Write/create files
-│   ├── FileEditTool/        # String-based file editing
-│   ├── GlobTool/            # File pattern matching
-│   ├── GrepTool/            # Code search (ripgrep + grep fallback)
-│   ├── WebFetchTool/        # URL content fetching
-│   └── TodoWriteTool/       # Task list management
-├── services/
-│   └── api/
-│       ├── client.ts        # Anthropic SDK client initialization
-│       └── systemPrompt.ts  # System prompt builder
-├── QueryEngine.ts           # Core: API call → tool_use loop → response
-├── state/
-│   └── AppState.ts          # Global application state
-├── types/
-│   ├── message.ts           # Message types (User, Assistant, System, ToolUse)
-│   ├── tool.ts              # Tool definition and execution interfaces
-│   └── command.ts           # Command definition interface
-├── constants/
-│   ├── models.ts            # Model names, pricing, display names
-│   └── version.ts           # Version constant
-└── utils/
-    ├── cost.ts              # Cost calculation and formatting
-    ├── cwd.ts               # Working directory management
-    └── git.ts               # Git status/branch utilities
+│   ├── cli.tsx              # CLI 入口（Commander.js + Ink）
+│   └── nonInteractive.ts    # 一次性提问模式
+├── QueryEngine.ts           # 核心：API 调用 → tool_use 循环 → 响应
+├── components/              # React/Ink 终端 UI 组件
+├── screens/                 # 交互屏幕
+├── commands/                # 斜杠命令系统
+├── tools/                   # 工具系统（8 个工具）
+├── services/api/            # Anthropic SDK 客户端 + 系统提示
+├── state/                   # 全局状态管理
+├── types/                   # TypeScript 类型定义
+├── constants/               # 模型配置、版本号
+└── utils/                   # 费用计算、Git、CWD 工具函数
 ```
 
-## Quick Start
+---
 
-### Prerequisites
+## 与原版的区别
 
-- Node.js >= 18
-- An Anthropic API key
+这是基于架构分析的全新重写，不是源码拷贝。
 
-### Install & Run
+| 特性 | 原版 | 本版本 |
+|------|------|--------|
+| 构建系统 | Bun bundler + `feature()` 宏 | 标准 TypeScript + tsx |
+| React 运行时 | React Compiler（自动 memoization） | 标准 React 18 |
+| MCP 支持 | 完整 Model Context Protocol | 未包含 |
+| Agent/Task | 子 agent 派生、worktree | 未包含 |
+| 认证 | OAuth 流程、API Key 管理 | 简单环境变量 |
+| 插件 | 插件加载器、市场 | 未包含 |
+| 语音 | 音频采集、语音转文字 | 未包含 |
+| Bridge/Remote | 远程会话管理 | 未包含 |
+| 安全 | 沙箱、权限、路径验证 | 简化 |
 
-```bash
-# Install dependencies
-npm install
+---
 
-# Set your API key
-export ANTHROPIC_API_KEY="sk-ant-..."
+## 常见问题
 
-# Run in interactive mode (React/Ink terminal UI)
-npx tsx src/entrypoints/cli.tsx
+### Q: 报错 `ANTHROPIC_API_KEY not set`
+设置环境变量：`export ANTHROPIC_API_KEY="你的密钥"`
 
-# Or build and run
-npm run build
-node dist/entrypoints/cli.js
-```
+### Q: 报错 `Cannot find module`
+运行 `npm install` 重新安装依赖，然后 `npm run build` 重新编译。
 
-### Usage
+### Q: 如何切换模型？
+交互模式下输入 `/model opus` 或 `/model haiku`，或启动时 `--model opus`。
 
-```bash
-# Interactive mode (default)
-claude
+### Q: 支持哪些模型？
+- `claude-sonnet-4-20250514` (默认，性价比最高)
+- `claude-opus-4-20250514` (最强)
+- `claude-3-5-haiku-20241022` (最快最便宜)
 
-# One-shot prompt
-claude -p "explain this codebase"
+### Q: Windows 能用吗？
+能。需要 Node.js >= 18 和 PowerShell/CMD。BashTool 在 Windows 上需要 WSL 或 Git Bash。
 
-# Choose a model
-claude -m haiku
-claude -m opus
-
-# Verbose mode
-claude --verbose
-
-# Auto-approve all tool use (dangerous!)
-claude --dangerously-skip-permissions
-```
-
-### Interactive Commands
-
-| Command | Description |
-|---------|-------------|
-| `/help` | Show available commands and tools |
-| `/model [name]` | View or switch AI model |
-| `/cost` | Show token usage and cost summary |
-| `/compact` | Summarize conversation to reduce context |
-| `/config [option]` | View or modify configuration |
-| `/clear` | Clear conversation history |
-| `/version` | Show version |
-| `/exit` | Exit Claude Code |
-
-## How It Works
-
-### The QueryEngine Loop
-
-The core of Claude Code is the `QueryEngine` class. Here's the simplified flow:
-
-```
-User Input
-    ↓
-Build System Prompt (tools, git context, etc.)
-    ↓
-Send to Anthropic API (streaming)
-    ↓
-┌─→ Receive Response
-│       ↓
-│   Has tool_use blocks?
-│       │
-│     Yes → Execute each tool (BashTool, FileReadTool, etc.)
-│       │       ↓
-│       │   Collect tool results
-│       │       ↓
-│       └── Send results back to API ──────┐
-│                                          │
-│   No → Return final text response        │
-│       ↓                                  │
-│   Update cost tracking                   │
-│       ↓                                  │
-    Display to user
-```
-
-### Tool System
-
-Each tool implements a `ToolDefinition` interface:
-- `name`: Tool identifier sent to the API
-- `description`: Sent to Claude to understand the tool's purpose
-- `inputSchema`: JSON Schema for the tool's parameters
-- `execute()`: Async function that performs the actual work
-
-Tools are registered in `tools/index.ts` and converted to Anthropic API format.
-
-## Differences from Original
-
-This is a clean-room reconstruction, not a copy. Key simplifications:
-
-| Feature | Original | This Version |
-|---------|----------|-------------|
-| Build system | Bun bundler with `feature()` macros | Standard TypeScript + tsx |
-| React runtime | React compiler (auto-memoization) | Standard React 18 |
-| MCP support | Full Model Context Protocol | Not included |
-| Agent/Task tools | Sub-agent spawning, worktrees | Not included |
-| Auth | OAuth flow, API key management | Simple env var |
-| Plugins | Plugin loader, marketplace | Not included |
-| Voice | Audio capture, speech-to-text | Not included |
-| Bridge/Remote | Remote session management | Not included |
-| Security | Sandbox, permissions, path validation | Simplified |
+---
 
 ## Disclaimer
 
-This is a research/educational project. The original Claude Code's architecture, copyright, and trademarks belong to Anthropic. This reconstruction is based on publicly visible architectural patterns and is **not** a copy of the original source code.
+This is a research/educational project. The original Claude Code's architecture, copyright, and trademarks belong to Anthropic.
