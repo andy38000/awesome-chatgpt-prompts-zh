@@ -229,7 +229,7 @@ def check_sd_available() -> dict:
 
         if info["device"] == "cuda":
             info["gpu_name"] = torch.cuda.get_device_name(0)
-            info["gpu_memory"] = f"{torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB"
+            info["gpu_memory"] = f"{torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB"
     except ImportError:
         info["torch"] = False
         info["message"] = "未安装 PyTorch。请运行: pip install torch"
