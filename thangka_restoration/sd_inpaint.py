@@ -56,6 +56,14 @@ def _load_pipeline(model_id: str = None):
         safety_checker=None,
     )
 
+    try:
+        lora_id = "Wangchuk1376/ThangkaModels"
+        print(f"加载唐卡专用 LoRA 模型: {lora_id}")
+        _pipeline.load_lora_weights(lora_id)
+        print("LoRA 模型加载成功！生成效果将更接近真实唐卡风格。")
+    except Exception as e:
+        print(f"LoRA 加载跳过（不影响基础功能）: {e}")
+
     if _device == "cpu":
         _pipeline.enable_attention_slicing()
     else:

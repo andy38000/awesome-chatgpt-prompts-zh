@@ -42,6 +42,14 @@ from restoration import (
     remove_stains, remove_yellow_stains,
     full_restoration_pipeline,
 )
+from paper_algorithms import (
+    paper_level_restore,
+    edge_guided_inpaint,
+    pyramid_inpaint,
+    frequency_guided_inpaint,
+    multi_direction_propagate,
+    symmetric_inpaint,
+)
 
 THEME = gr.themes.Soft(
     primary_hue="amber",
@@ -189,10 +197,7 @@ def manual_inpaint_fn(image, mask_image, radius, method):
 
     _, binary_mask = cv2.threshold(gray_mask, 30, 255, cv2.THRESH_BINARY)
 
-    if method == "multi_scale":
-        result = advanced_damage_repair(bgr, binary_mask, method="multi_scale")
-    else:
-        result = manual_inpaint(bgr, binary_mask, int(radius), method)
+    result = _dispatch_inpaint(bgr, binary_mask, method, int(radius))
     return to_rgb(result)
 
 
@@ -238,11 +243,26 @@ def auto_damage_repair_fn(image, threshold, radius, method):
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
     mask = cv2.dilate(mask, kernel, iterations=1)
 
-    if method == "multi_scale":
-        result = advanced_damage_repair(bgr, mask, method="multi_scale")
-    else:
-        result = manual_inpaint(bgr, mask, int(radius), method)
+    result = _dispatch_inpaint(bgr, mask, method, int(radius))
     return to_rgb(result)
+
+
+def _dispatch_inpaint(bgr, mask, method, radius=7):
+    """根据方法名路由到对应的修复算法。"""
+    if method == "paper_level":
+        return paper_level_restore(bgr, mask)
+    elif method == "edge_guided":
+        return edge_guided_inpaint(bgr, mask)
+    elif method == "pyramid":
+        return pyramid_inpaint(bgr, mask)
+    elif method == "frequency":
+        return frequency_guided_inpaint(bgr, mask)
+    elif method == "symmetric":
+        return symmetric_inpaint(bgr, mask)
+    elif method == "multi_scale":
+        return advanced_damage_repair(bgr, mask, method="multi_scale")
+    else:
+        return manual_inpaint(bgr, mask, radius, method)
 
 
 def color_restore_fn(image, saturation, warmth):
@@ -464,9 +484,11 @@ def build_app():
                                                   label="检测阈值（越低检测越多）")
                         sl_dmg_rad = gr.Slider(1, 20, value=8, step=1, label="修复半径")
                         dd_dmg_m = gr.Dropdown(
-                            ["multi_scale", "ns", "telea"],
-                            value="multi_scale",
-                            label="修复算法（multi_scale=多尺度迭代最佳，ns/telea=传统）",
+                            ["paper_level", "edge_guided", "pyramid", "frequency",
+                             "symmetric", "multi_scale", "ns", "telea"],
+                            value="paper_level",
+                            label="修复算法",
+                            info="paper_level=论文综合(最佳) | edge_guided=边缘引导 | pyramid=金字塔 | frequency=频域",
                         )
                         with gr.Row():
                             btn_dmg_detect = gr.Button("检测损伤（预览）")
@@ -495,9 +517,10 @@ def build_app():
                         img_manual_mask = gr.Image(label="上传标记图（白色=需要修复的区域）", type="numpy")
                         sl_manual_r = gr.Slider(1, 20, value=8, step=1, label="修复半径")
                         dd_manual_m = gr.Dropdown(
-                            ["multi_scale", "ns", "telea"],
-                            value="multi_scale",
-                            label="修复算法（multi_scale=多尺度迭代最佳）",
+                            ["paper_level", "edge_guided", "pyramid", "frequency",
+                             "symmetric", "multi_scale", "ns", "telea"],
+                            value="paper_level",
+                            label="修复算法（paper_level=论文综合最佳）",
                         )
                         btn_manual = gr.Button("修复标记区域", variant="primary")
                     with gr.Column():
