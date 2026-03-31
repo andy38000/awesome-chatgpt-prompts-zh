@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WEPClaude</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.0/marked.min.js"></script>
+</head>
+<body>
+<div id="app">
+  <!-- Sidebar -->
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span>WEPClaude</span>
+      </div>
+      <button class="icon-btn" id="btn-new-chat" title="New Chat">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="section-title">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6m-7-7H1m22 0h-4m-1.5-7.5L15 7m-6 6-2.5 2.5m12-2.5L16 17M7 7 4.5 4.5"/></svg>
+        Provider / Model
+      </div>
+      <div id="provider-selector">
+        <select id="sel-provider"><option value="">-- Select --</option></select>
+        <select id="sel-model"><option value="">-- Select --</option></select>
+      </div>
+      <button class="sidebar-btn" id="btn-add-provider">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add Provider
+      </button>
+      <button class="sidebar-btn danger" id="btn-del-provider">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14H7L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+        Delete Provider
+      </button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="section-title">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Chat History
+      </div>
+      <div id="chat-list"></div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="token-info" id="token-info">Tokens: 0 ↑ / 0 ↓</div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main id="main">
+    <!-- Top bar -->
+    <div id="topbar">
+      <button class="icon-btn" id="btn-toggle-sidebar" title="Toggle Sidebar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <div class="topbar-title" id="topbar-title">New Chat</div>
+      <div class="topbar-model" id="topbar-model">No model selected</div>
+    </div>
+
+    <!-- Messages -->
+    <div id="messages">
+      <div class="welcome" id="welcome">
+        <div class="welcome-logo">◆</div>
+        <h2>WEPClaude</h2>
+        <p>Add a Provider in the sidebar, then start chatting.</p>
+        <div class="welcome-hints">
+          <div class="hint" data-prompt="Explain this codebase structure">📁 Explain codebase</div>
+          <div class="hint" data-prompt="Help me fix a bug in my code">🐛 Fix a bug</div>
+          <div class="hint" data-prompt="Write a Python script for data processing">🐍 Write Python</div>
+          <div class="hint" data-prompt="Review my code for improvements">🔍 Code review</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div id="input-area">
+      <div class="input-wrapper">
+        <textarea id="input" placeholder="Type a message... (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
+        <button id="btn-send" title="Send">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+        <button id="btn-stop" title="Stop" class="hidden">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
+      </div>
+      <div class="input-hint">Enter = send · Shift+Enter = newline · Provider: <span id="hint-provider">none</span></div>
+    </div>
+  </main>
+</div>
+
+<!-- Add Provider Modal -->
+<div class="modal-overlay hidden" id="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Add Provider</h3>
+      <button class="icon-btn" id="btn-close-modal">✕</button>
+    </div>
+    <div class="modal-body">
+      <label>Name</label>
+      <input id="inp-name" placeholder="e.g. deepseek, openai, zhipu" />
+      <label>Format</label>
+      <div class="radio-group">
+        <label class="radio"><input type="radio" name="format" value="openai" checked> OpenAI Compatible</label>
+        <label class="radio"><input type="radio" name="format" value="anthropic"> Anthropic</label>
+      </div>
+      <label>Base URL</label>
+      <input id="inp-url" placeholder="e.g. https://api.deepseek.com" />
+      <label>API Key</label>
+      <input id="inp-key" type="password" placeholder="sk-..." />
+      <label>Model(s) <span class="hint-text">comma separated</span></label>
+      <input id="inp-models" placeholder="e.g. deepseek-chat, deepseek-coder" />
+      <label>Max Tokens</label>
+      <input id="inp-max-tokens" type="number" value="4096" />
+    </div>
+    <div class="modal-footer">
+      <button class="btn secondary" id="btn-cancel-modal">Cancel</button>
+      <button class="btn primary" id="btn-save-provider">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
