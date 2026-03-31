@@ -686,23 +686,28 @@ def full_restoration_pipeline(
 def reveal_faded_details(image: np.ndarray, strength: float = 1.0) -> np.ndarray:
     """
     让褪色的图案重新显现。
-    原理：在 LAB L 通道上用小窗口 CLAHE 放大局部对比度，
-    同时在 a/b 通道上也轻微放大色差，让几乎看不见的花纹重新有颜色。
-    不做任何模糊/腐蚀，只增强已有的微小差异。
+
+    三层增强：
+    1. 超小窗口 CLAHE (4x4) — 放大每个小区域内的微小对比差异
+    2. 中等窗口 CLAHE (8x8) — 放大中等尺度的图案轮廓
+    3. LAB a/b 通道色差放大 — 让残存的色彩痕迹变得可见
     """
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
 
-    clip = 1.5 + strength
-    clahe = cv2.createCLAHE(clipLimit=clip, tileGridSize=(4, 4))
-    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
+    clip_fine = 2.0 + strength * 1.5
+    clahe_fine = cv2.createCLAHE(clipLimit=clip_fine, tileGridSize=(4, 4))
+    lab[:, :, 0] = clahe_fine.apply(lab[:, :, 0])
 
-    if strength > 0.5:
-        a = lab[:, :, 1].astype(np.float32)
-        b = lab[:, :, 2].astype(np.float32)
-        a_mid, b_mid = 128.0, 128.0
-        boost = 1.0 + strength * 0.15
-        lab[:, :, 1] = np.clip((a - a_mid) * boost + a_mid, 0, 255).astype(np.uint8)
-        lab[:, :, 2] = np.clip((b - b_mid) * boost + b_mid, 0, 255).astype(np.uint8)
+    clip_mid = 1.5 + strength * 0.8
+    clahe_mid = cv2.createCLAHE(clipLimit=clip_mid, tileGridSize=(8, 8))
+    lab[:, :, 0] = clahe_mid.apply(lab[:, :, 0])
+
+    a = lab[:, :, 1].astype(np.float32)
+    b = lab[:, :, 2].astype(np.float32)
+    a_mid, b_mid = 128.0, 128.0
+    color_boost = 1.0 + strength * 0.25
+    lab[:, :, 1] = np.clip((a - a_mid) * color_boost + a_mid, 0, 255).astype(np.uint8)
+    lab[:, :, 2] = np.clip((b - b_mid) * color_boost + b_mid, 0, 255).astype(np.uint8)
 
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
@@ -725,19 +730,19 @@ def smart_restoration(image: np.ndarray) -> np.ndarray:
     result = image.copy()
 
     if info["is_dark"]:
-        result = auto_brightness(result, target=115.0)
+        result = auto_brightness(result, target=120.0)
+
+    result = reveal_faded_details(result, strength=1.5)
 
     if info["is_very_faded"]:
-        result = restore_colors(result, saturation=1.35, warmth=1.0)
+        result = restore_colors(result, saturation=1.5, warmth=1.0)
     elif info["is_faded"]:
-        result = restore_colors(result, saturation=1.2, warmth=1.0)
+        result = restore_colors(result, saturation=1.3, warmth=1.0)
     else:
-        result = restore_colors(result, saturation=1.1, warmth=1.0)
+        result = restore_colors(result, saturation=1.15, warmth=1.0)
 
-    result = reveal_faded_details(result, strength=1.0)
+    result = auto_contrast(result, clip_percent=0.8)
 
-    result = auto_contrast(result, clip_percent=0.5)
-
-    result = sharpen(result, amount=0.3)
+    result = sharpen(result, amount=0.5)
 
     return result
