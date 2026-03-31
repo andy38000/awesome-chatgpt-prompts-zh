@@ -559,20 +559,17 @@ def remove_yellow_stains(image: np.ndarray, radius: int = 5) -> np.ndarray:
 # 10. 纹理合成修复 (AI级别修复)
 # ---------------------------------------------------------------------------
 
-def texture_inpaint(image: np.ndarray, mask: np.ndarray,
-                    patch_size: int = 15) -> np.ndarray:
+def multi_scale_inpaint(image: np.ndarray, mask: np.ndarray,
+                        max_radius: int = 10) -> np.ndarray:
     """
-    基于纹理合成的智能修复：从周围完好区域提取纹理模式，
-    用 patch matching 重建缺失区域的图案。
-    比 OpenCV inpaint 效果好很多，能恢复复杂花纹。
+    多尺度迭代修复：从边缘逐步向中心修复，每次只修一小层。
+    比单次大半径修复效果好很多，能更好地延续周围的纹理和线条。
 
-    patch_size: 越大越能捕获大图案，但越慢。建议 10-25。
+    原理：
+    1. 将掩膜从外向内分成多层（洋葱皮式）
+    2. 每层用小半径 NS 修复（只修边缘一圈）
+    3. 每修完一层，下一层就有了更好的参考信息
     """
-    try:
-        from patch_based_inpainting.inpaint import Inpaint
-    except ImportError:
-        return cv2.inpaint(image, mask, 7, cv2.INPAINT_NS)
-
     if len(mask.shape) == 3:
         mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
     _, binary = cv2.threshold(mask, 127, 255, cv2.THRESH_BINARY)
@@ -580,42 +577,45 @@ def texture_inpaint(image: np.ndarray, mask: np.ndarray,
     if np.sum(binary > 0) == 0:
         return image
 
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    result = image.copy()
+    remaining = binary.copy()
 
-    mask_bool = (binary > 0).astype(np.uint8) * 255
+    for r in range(2, max_radius + 1, 2):
+        if np.sum(remaining > 0) == 0:
+            break
 
-    overlap = max(2, patch_size // 3)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (r * 2, r * 2))
+        eroded = cv2.erode(remaining, kernel, iterations=1)
+        layer = remaining - eroded
 
-    try:
-        inp = Inpaint(rgb, mask_bool, patch_size=patch_size,
-                      overlap_size=overlap, method='blend')
-        result_rgb = inp.resolve()
-        result = cv2.cvtColor(result_rgb.astype(np.uint8), cv2.COLOR_RGB2BGR)
-    except Exception:
-        result = cv2.inpaint(image, binary, 7, cv2.INPAINT_NS)
+        if np.sum(layer > 0) == 0:
+            layer = remaining
+
+        result = cv2.inpaint(result, layer, 3, cv2.INPAINT_NS)
+        remaining = eroded
+
+    if np.sum(remaining > 0) > 0:
+        result = cv2.inpaint(result, remaining, 5, cv2.INPAINT_NS)
 
     return result
 
 
 def advanced_damage_repair(image: np.ndarray, mask: np.ndarray,
-                           method: str = "texture") -> np.ndarray:
+                           method: str = "multi_scale") -> np.ndarray:
     """
-    高级损伤修复：结合纹理合成和传统 inpaint。
+    高级损伤修复。
 
     method:
-    - "texture": 纹理合成（效果最好，较慢）
-    - "ns": Navier-Stokes inpaint（中等效果，较快）
-    - "combined": 先 NS 粗修，再纹理合成精修
+    - "multi_scale": 多尺度迭代修复（推荐，效果最好）
+    - "ns": Navier-Stokes inpaint
+    - "telea": Fast Marching Method
     """
-    if method == "texture":
-        return texture_inpaint(image, mask, patch_size=15)
+    if method in ("multi_scale", "texture", "combined"):
+        return multi_scale_inpaint(image, mask, max_radius=10)
     elif method == "ns":
         return inpaint_cracks(image, mask, radius=7, method="ns")
-    elif method == "combined":
-        rough = inpaint_cracks(image, mask, radius=5, method="ns")
-        return texture_inpaint(rough, mask, patch_size=12)
     else:
-        return inpaint_cracks(image, mask, radius=7, method="ns")
+        return inpaint_cracks(image, mask, radius=7, method="telea")
 
 
 # ---------------------------------------------------------------------------

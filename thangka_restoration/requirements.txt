@@ -3,4 +3,3 @@ numpy>=1.24.0
 Pillow>=10.0.0
 gradio>=4.0.0
 scikit-image>=0.21.0
-patch-based-inpainting>=0.0.3
