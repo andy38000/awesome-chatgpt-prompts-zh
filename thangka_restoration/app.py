@@ -735,15 +735,23 @@ def build_app():
 
             def sd_repair_fn(image, mask_image, prompt_type, custom_prompt,
                              strength, guidance, steps, seed):
-                if image is None or mask_image is None:
-                    return None
+                if image is None:
+                    raise gr.Error("请先上传唐卡原图！")
+                if mask_image is None:
+                    raise gr.Error(
+                        "请上传掩膜图！\n"
+                        "方法：用 Windows 画图打开原图 → 用白色画笔涂抹损坏区域 → 保存 → 上传"
+                    )
                 try:
                     from sd_inpaint import sd_inpaint
-                    from restoration import from_rgb, to_rgb, resize_if_needed
                 except ImportError:
-                    return None
+                    raise gr.Error(
+                        "未安装 AI 修复依赖！请运行：\n"
+                        "pip install diffusers transformers accelerate"
+                    )
 
                 bgr = from_rgb(image)
+                bgr = resize_if_needed(bgr)
 
                 mask_resized = cv2.resize(mask_image, (bgr.shape[1], bgr.shape[0]))
                 if len(mask_resized.shape) == 3:
@@ -751,6 +759,9 @@ def build_app():
                 else:
                     mask_gray = mask_resized
                 _, binary = cv2.threshold(mask_gray, 30, 255, cv2.THRESH_BINARY)
+
+                if np.sum(binary > 0) == 0:
+                    raise gr.Error("掩膜图中没有检测到白色区域，请确认已用白色涂抹损坏区域。")
 
                 result = sd_inpaint(
                     bgr, binary,
