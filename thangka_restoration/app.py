@@ -673,12 +673,33 @@ def build_app():
             btn_yellow.click(remove_yellow_fn, [img_stain, sl_yellow_r], [out_stain])
 
         # ==== Tab: AI 生成式修复 ====
-        with gr.Tab("🤖 AI 修复（Stable Diffusion）"):
+        with gr.Tab("🤖 AI 修复（唐卡专用模型）"):
             gr.Markdown(
-                "**AI 生成式修复** — 使用 Stable Diffusion 理解唐卡绘画风格，"
-                "智能生成并填充颜料脱落/损伤区域的内容。\n\n"
-                "**⚠️ 需要额外安装：** `pip install diffusers transformers accelerate torch`\n\n"
-                "**推荐配置：** NVIDIA GPU (6GB+ 显存) | CPU 也能用但很慢（5-15分钟/张）"
+                "## AI 生成式修复\n\n"
+                "使用四川大学开源的 **唐卡专用 LoRA 模型** (基于 1376 张专业唐卡训练)，\n"
+                "让 AI 理解唐卡绘画风格，智能重绘颜料脱落/损伤区域。\n\n"
+                "模型来源: [Wangchuk1376/ThangkaModels](https://huggingface.co/Wangchuk1376/ThangkaModels)\n\n"
+                "---\n"
+                "### 首次使用安装（只需一次）\n"
+                "```\n"
+                "pip install diffusers transformers accelerate safetensors huggingface-hub\n"
+                "```\n"
+                "首次运行会自动下载模型（约 5GB），之后不需要重复下载。\n\n"
+                "---\n"
+                "### 操作步骤\n"
+                "**第 1 步：制作掩膜图**\n"
+                "1. 打开 Windows **画图**（或 PS/手机修图 App）\n"
+                "2. 打开你的唐卡原图\n"
+                "3. 选择 **白色画笔**（粗一点，比如 20px）\n"
+                "4. 涂抹所有 **需要 AI 重绘的区域**（颜料脱落、损坏的地方）\n"
+                "5. **另存为**一张新图片（这就是掩膜图）\n\n"
+                "**第 2 步：上传并修复**\n"
+                "1. 在下方 **上传唐卡原图**\n"
+                "2. **上传掩膜图**（刚才涂白的那张）\n"
+                "3. 选择 **修复类型**（花卉卷草/佛像面部/金色装饰 等）\n"
+                "4. 点击 **「开始 AI 修复」**\n"
+                "5. 等待 10-30 秒（GPU）或 5-15 分钟（CPU）\n"
+                "6. 不满意？换个 **随机种子** 重试，或调高 **推理步数**\n"
             )
 
             btn_check_sd = gr.Button("检查 AI 修复环境")
@@ -729,25 +750,31 @@ def build_app():
                         -1, 9999, value=-1, step=1,
                         label="随机种子（-1=随机，固定值可复现结果）",
                     )
+                    dd_sd_variant = gr.Dropdown(
+                        ["recommended", "detail"],
+                        value="recommended",
+                        label="LoRA 模型",
+                        info="recommended=Status_140(推荐平衡) | detail=ACD_250(更多细节)",
+                    )
                     btn_sd = gr.Button("开始 AI 修复", variant="primary", size="lg")
                 with gr.Column():
                     out_sd = gr.Image(label="AI 修复结果", type="numpy")
 
             def sd_repair_fn(image, mask_image, prompt_type, custom_prompt,
-                             strength, guidance, steps, seed):
+                             strength, guidance, steps, seed, variant):
                 if image is None:
                     raise gr.Error("请先上传唐卡原图！")
                 if mask_image is None:
                     raise gr.Error(
                         "请上传掩膜图！\n"
-                        "方法：用 Windows 画图打开原图 → 用白色画笔涂抹损坏区域 → 保存 → 上传"
+                        "方法：用 Windows 画图打开原图 → 用白色画笔涂抹损坏区域 → 另存为 → 上传"
                     )
                 try:
                     from sd_inpaint import sd_inpaint
                 except ImportError:
                     raise gr.Error(
-                        "未安装 AI 修复依赖！请运行：\n"
-                        "pip install diffusers transformers accelerate"
+                        "未安装 AI 修复依赖！请在命令行运行：\n"
+                        "pip install diffusers transformers accelerate safetensors huggingface-hub"
                     )
 
                 bgr = from_rgb(image)
@@ -761,7 +788,7 @@ def build_app():
                 _, binary = cv2.threshold(mask_gray, 30, 255, cv2.THRESH_BINARY)
 
                 if np.sum(binary > 0) == 0:
-                    raise gr.Error("掩膜图中没有检测到白色区域，请确认已用白色涂抹损坏区域。")
+                    raise gr.Error("掩膜图中没有检测到白色区域，请确认已用白色涂抹了损坏区域。")
 
                 result = sd_inpaint(
                     bgr, binary,
@@ -771,32 +798,38 @@ def build_app():
                     guidance_scale=guidance,
                     num_steps=int(steps),
                     seed=int(seed),
+                    model_variant=variant,
                 )
                 return to_rgb(result)
 
             btn_sd.click(
                 sd_repair_fn,
                 inputs=[img_sd, img_sd_mask, dd_sd_prompt, txt_sd_custom,
-                        sl_sd_strength, sl_sd_guidance, sl_sd_steps, sl_sd_seed],
+                        sl_sd_strength, sl_sd_guidance, sl_sd_steps, sl_sd_seed,
+                        dd_sd_variant],
                 outputs=out_sd,
             )
 
             gr.Markdown(
                 """
                 ---
-                **使用步骤：**
-                1. 用画图软件在唐卡图片上用**白色**涂抹损伤区域，保存为掩膜图
-                2. 分别上传原图和掩膜图
-                3. 选择**修复类型**（选最接近损伤区域内容的选项）
-                4. 点击「开始 AI 修复」
-                5. 如果效果不满意，调整参数或换个随机种子重试
+                ### 参数建议
 
-                **参数建议：**
-                | 场景 | 重绘强度 | 风格引导 | 步数 |
-                |------|---------|---------|------|
-                | 小面积颜料脱落 | 0.75-0.85 | 10-12 | 25-30 |
-                | 大面积损伤 | 0.85-0.95 | 12-15 | 30-40 |
-                | 精细花纹区域 | 0.80-0.90 | 12-15 | 35-50 |
+                | 损伤类型 | 修复类型 | 重绘强度 | 风格引导 | 步数 |
+                |---------|---------|---------|---------|------|
+                | 花卉/卷草脱落 | 花卉卷草 | 0.80-0.90 | 12-15 | 30-40 |
+                | 佛像面部损伤 | 佛像面部 | 0.75-0.85 | 10-12 | 35-50 |
+                | 金线/金色脱落 | 金色装饰 | 0.80-0.90 | 12-15 | 30-40 |
+                | 莲花区域损伤 | 莲花 | 0.80-0.90 | 12 | 30 |
+                | 衣物褪色 | 衣物纹饰 | 0.85-0.95 | 12-15 | 30-40 |
+                | 背景天空损伤 | 背景天空 | 0.85-0.95 | 10-12 | 25-30 |
+                | 不确定 | 通用修复 | 0.85 | 12 | 30 |
+
+                ### 技巧
+                - 掩膜涂大一点比涂小好（多覆盖一些边缘）
+                - 同一区域可以多次修复（把上一次结果作为新原图）
+                - 不满意就换 **随机种子**（每个种子生成不同的结果）
+                - **推理步数** 越高质量越好，30 步通常够用
                 """
             )
 
