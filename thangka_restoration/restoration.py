@@ -712,37 +712,68 @@ def reveal_faded_details(image: np.ndarray, strength: float = 1.0) -> np.ndarray
     return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
+def detect_worn_areas(image: np.ndarray, threshold: float = 0.4) -> np.ndarray:
+    """
+    自动检测磨损/风化严重的区域。
+    原理：磨损区域的局部方差（纹理丰富度）远低于完好区域。
+    返回二值掩膜，白色=磨损严重的区域。
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    local_mean = cv2.blur(gray, (15, 15))
+    local_sq_mean = cv2.blur(gray * gray, (15, 15))
+    local_var = local_sq_mean - local_mean * local_mean
+    local_var = np.clip(local_var, 0, None)
+
+    global_var = np.mean(local_var)
+    if global_var < 1:
+        return np.zeros_like(gray, dtype=np.uint8)
+
+    worn = (local_var < global_var * threshold).astype(np.uint8) * 255
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    worn = cv2.morphologyEx(worn, cv2.MORPH_OPEN, kernel, iterations=2)
+    worn = cv2.morphologyEx(worn, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    return worn
+
+
 def smart_restoration(image: np.ndarray) -> np.ndarray:
     """
-    智能修复模式 V5：
+    智能修复模式 V6：
 
-    绝对禁止清单：去噪、形态学操作、大核模糊、任何会丢像素的操作。
-    所有操作只在色彩空间做加法/乘法增强，永远不减少信息。
-
-    步骤：
-    1. 亮度校正（gamma，纯查表，零损失）
-    2. 色彩微增强（HSV 饱和度乘法，零损失）
-    3. 让褪色图案重新显现（小窗口 CLAHE，只放大已有差异）
-    4. 全局对比度优化（直方图拉伸，零损失）
-    5. 轻微锐化（unsharp mask，只做加法）
+    两阶段策略：
+    阶段1：极限增强 — 挤出所有残留细节
+    阶段2：磨损区域自动检测+修补 — 用论文算法填补已消失的内容
     """
     info = analyze_image(image)
     result = image.copy()
 
     if info["is_dark"]:
-        result = auto_brightness(result, target=120.0)
+        result = auto_brightness(result, target=125.0)
 
-    result = reveal_faded_details(result, strength=1.5)
+    result = reveal_faded_details(result, strength=2.0)
 
     if info["is_very_faded"]:
-        result = restore_colors(result, saturation=1.5, warmth=1.0)
+        result = restore_colors(result, saturation=1.6, warmth=1.0)
     elif info["is_faded"]:
-        result = restore_colors(result, saturation=1.3, warmth=1.0)
+        result = restore_colors(result, saturation=1.4, warmth=1.0)
     else:
-        result = restore_colors(result, saturation=1.15, warmth=1.0)
+        result = restore_colors(result, saturation=1.2, warmth=1.0)
 
-    result = auto_contrast(result, clip_percent=0.8)
+    result = auto_contrast(result, clip_percent=1.0)
 
-    result = sharpen(result, amount=0.5)
+    worn_mask = detect_worn_areas(result, threshold=0.3)
+    worn_pixels = np.sum(worn_mask > 0)
+    total_pixels = worn_mask.shape[0] * worn_mask.shape[1]
+
+    if worn_pixels > total_pixels * 0.01 and worn_pixels < total_pixels * 0.5:
+        try:
+            from paper_algorithms import edge_guided_inpaint
+            result = edge_guided_inpaint(result, worn_mask, iterations=3)
+        except Exception:
+            result = cv2.inpaint(result, worn_mask, 5, cv2.INPAINT_NS)
+
+    result = sharpen(result, amount=0.6)
 
     return result
